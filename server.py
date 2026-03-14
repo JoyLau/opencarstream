@@ -429,31 +429,35 @@ STATUS_HTML = """<!DOCTYPE html>
 </div>
 
 <script>
-(() => {
-  const idInput = document.getElementById("yt-id");
-  const qualitySelect = document.getElementById("yt-quality");
-  const syncSelect = document.getElementById("yt-sync");
-  const goButton = document.getElementById("go-stream");
+(function () {
+  var idInput = document.getElementById("yt-id");
+  var qualitySelect = document.getElementById("yt-quality");
+  var syncSelect = document.getElementById("yt-sync");
+  var goButton = document.getElementById("go-stream");
   syncSelect.value = "{{audio_delay_ms}}";
 
   function openStream() {
-    const id = (idInput.value || "").trim();
+    var id = (idInput.value || "").trim();
     if (!id) {
       idInput.focus();
       return;
     }
-    const url = "https://www.youtube.com/watch?v=" + encodeURIComponent(id);
-    const quality = (qualitySelect.value || "").trim();
-    const sync = (syncSelect.value || "1200").trim();
-    let target = "/watch?url=" + encodeURIComponent(url);
+    var url = "https://www.youtube.com/watch?v=" + encodeURIComponent(id);
+    var quality = (qualitySelect.value || "").trim();
+    var sync = (syncSelect.value || "1200").trim();
+    var target = "/watch?url=" + encodeURIComponent(url);
     if (quality) target += "&quality=" + encodeURIComponent(quality);
     if (sync) target += "&sync=" + encodeURIComponent(sync);
     window.location.href = target;
   }
 
   goButton.addEventListener("click", openStream);
-  idInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") openStream();
+  idInput.addEventListener("keydown", function (e) {
+    var eventObj = e || window.event;
+    var key = eventObj.key || "";
+    if (key === "Enter" || eventObj.keyCode === 13) {
+      openStream();
+    }
   });
 })();
 </script>
@@ -490,47 +494,65 @@ WATCH_HTML = """<!DOCTYPE html>
     <div id="diag" class="diag"></div>
   </div>
 <script>
-(() => {
-  const sid = "{{stream_id}}";
-  const syncMs = "{{sync_ms}}";
+(function () {
+  var sid = "{{stream_id}}";
+  var syncMs = "{{sync_ms}}";
   if (!sid) {
     window.location.href = "/";
     return;
   }
-  const q = "?sid=" + encodeURIComponent(sid) + "&sync=" + encodeURIComponent(syncMs);
-  const img = document.getElementById("mjpeg");
-  const diag = document.getElementById("diag");
+  var q = "?sid=" + encodeURIComponent(sid) + "&sync=" + encodeURIComponent(syncMs);
+  var img = document.getElementById("mjpeg");
+  var diag = document.getElementById("diag");
   img.src = "/stream" + q;
-  const audio = document.getElementById("audio");
-  let audioStarted = false;
-  const startAudio = () => {
+  var audio = document.getElementById("audio");
+  var audioStarted = false;
+
+  function startAudio() {
     if (audioStarted) return;
     audioStarted = true;
     audio.src = "/audio" + q;
-    audio.play().catch(() => {});
-  };
-  img.addEventListener("load", startAudio, { once: true });
+    try {
+      var playPromise = audio.play();
+      if (playPromise && typeof playPromise.catch === "function") {
+        playPromise.catch(function () {});
+      }
+    } catch (err) {
+      // Ignore autoplay errors; controls stay available for manual play.
+    }
+  }
+
+  img.addEventListener("load", startAudio);
   setTimeout(startAudio, 3000);
 
-  const showDiag = (message) => {
+  function showDiag(message) {
     diag.style.display = "block";
     diag.textContent = message;
-  };
+  }
 
-  img.addEventListener("error", async () => {
-    try {
-      const res = await fetch("/stream_status?sid=" + encodeURIComponent(sid));
-      const data = await res.json();
-      const msg = [
-        "Video stream failed to load.",
-        "status: " + (data.status || "unknown"),
-        "error: " + (data.error || "n/a"),
-        "detail: " + (data.error_detail || "n/a")
-      ].join("\n");
-      showDiag(msg);
-    } catch (e) {
-      showDiag("Video stream failed to load and diagnostics request failed.");
-    }
+  img.addEventListener("error", function () {
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/stream_status?sid=" + encodeURIComponent(sid), true);
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) return;
+      if (xhr.status < 200 || xhr.status >= 300) {
+        showDiag("Video stream failed to load and diagnostics request failed.");
+        return;
+      }
+      try {
+        var data = JSON.parse(xhr.responseText);
+        var msg = [
+          "Video stream failed to load.",
+          "status: " + (data.status || "unknown"),
+          "error: " + (data.error || "n/a"),
+          "detail: " + (data.error_detail || "n/a")
+        ].join("\\n");
+        showDiag(msg);
+      } catch (err) {
+        showDiag("Video stream failed to load and diagnostics parse failed.");
+      }
+    };
+    xhr.send();
   });
 })();
 </script>
