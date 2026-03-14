@@ -34,8 +34,7 @@ FFMPEG_QUALITY= int(os.environ.get("FFMPEG_QUALITY", "3"))   # 1=best, 31=worst
 STREAM_WIDTH  = int(os.environ.get("STREAM_WIDTH", "1920"))
 STREAM_HEIGHT = int(os.environ.get("STREAM_HEIGHT", "1080"))
 MAX_STREAMS   = int(os.environ.get("MAX_STREAMS", "3"))       # concurrent stream slots
-# Delays MJPEG start relative to audio start for A/V sync tuning.
-VIDEO_DELAY_MS = int(os.environ.get("VIDEO_DELAY_MS", os.environ.get("AUDIO_DELAY_MS", "1200")))
+AUDIO_DELAY_MS= int(os.environ.get("AUDIO_DELAY_MS", "1200")) # startup sync offset
 
 
 # ── Per-stream state ──────────────────────────────────────────────────────────
@@ -388,12 +387,12 @@ STATUS_HTML = """<!DOCTYPE html>
       </select>
       <select id="yt-sync"
               style="background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-family:monospace;">
-        <option value="0">Video delay: 0 ms</option>
-        <option value="400">Video delay: 400 ms</option>
-        <option value="800">Video delay: 800 ms</option>
-        <option value="1200" selected>Video delay: 1200 ms</option>
-        <option value="1600">Video delay: 1600 ms</option>
-        <option value="2000">Video delay: 2000 ms</option>
+        <option value="0">Audio delay: 0 ms</option>
+        <option value="400">Audio delay: 400 ms</option>
+        <option value="800">Audio delay: 800 ms</option>
+        <option value="1200" selected>Audio delay: 1200 ms</option>
+        <option value="1600">Audio delay: 1600 ms</option>
+        <option value="2000">Audio delay: 2000 ms</option>
       </select>
       <button id="go-stream"
               style="background:var(--red);color:white;border:0;border-radius:6px;padding:10px 16px;font-family:'Orbitron',monospace;letter-spacing:.08em;cursor:pointer;">
@@ -425,7 +424,7 @@ STATUS_HTML = """<!DOCTYPE html>
     <div class="env-item">Quality <b>{{quality}}</b></div>
     <div class="env-item">Resolution <b>{{width}}×{{height}}</b></div>
     <div class="env-item">Max streams <b>{{max_streams}}</b></div>
-    <div class="env-item">Video delay <b>{{video_delay_ms}} ms</b></div>
+    <div class="env-item">Audio delay <b>{{audio_delay_ms}} ms</b></div>
   </div>
 </div>
 
@@ -435,7 +434,7 @@ STATUS_HTML = """<!DOCTYPE html>
   const qualitySelect = document.getElementById("yt-quality");
   const syncSelect = document.getElementById("yt-sync");
   const goButton = document.getElementById("go-stream");
-  syncSelect.value = "{{video_delay_ms}}";
+  syncSelect.value = "{{audio_delay_ms}}";
 
   function openStream() {
     const id = (idInput.value || "").trim();
@@ -498,34 +497,20 @@ WATCH_HTML = """<!DOCTYPE html>
     window.location.href = "/";
     return;
   }
+  const q = "?sid=" + encodeURIComponent(sid) + "&sync=" + encodeURIComponent(syncMs);
   const img = document.getElementById("mjpeg");
   const diag = document.getElementById("diag");
+  img.src = "/stream" + q;
   const audio = document.getElementById("audio");
-  let videoStarted = false;
   let audioStarted = false;
-
-  const startVideo = () => {
-    if (videoStarted) return;
-    videoStarted = true;
-    const videoQ = "?sid=" + encodeURIComponent(sid);
-    const delay = Math.max(0, Number(syncMs || "0"));
-    setTimeout(() => {
-      img.src = "/stream" + videoQ;
-    }, delay);
-  };
-
   const startAudio = () => {
     if (audioStarted) return;
     audioStarted = true;
-    const audioQ = "?sid=" + encodeURIComponent(sid);
-    audio.src = "/audio" + audioQ;
+    audio.src = "/audio" + q;
     audio.play().catch(() => {});
   };
-
-  audio.addEventListener("playing", startVideo, { once: true });
-  audio.addEventListener("canplay", startVideo, { once: true });
-  startAudio();
-  setTimeout(startVideo, 3500);
+  img.addEventListener("load", startAudio, { once: true });
+  setTimeout(startAudio, 3000);
 
   const showDiag = (message) => {
     diag.style.display = "block";
@@ -581,7 +566,7 @@ def render_status_page() -> str:
             .replace("{{width}}", str(STREAM_WIDTH))
             .replace("{{height}}", str(STREAM_HEIGHT))
             .replace("{{max_streams}}", str(MAX_STREAMS))
-            .replace("{{video_delay_ms}}", str(VIDEO_DELAY_MS)))
+            .replace("{{audio_delay_ms}}", str(AUDIO_DELAY_MS)))
 
 def render_watch_page(stream_id: str, sync_ms: int) -> str:
     return (WATCH_HTML
@@ -616,7 +601,7 @@ class Handler(BaseHTTPRequestHandler):
     @staticmethod
     def _parse_sync_ms(raw_sync: str | None) -> int:
         if raw_sync is None or raw_sync == "":
-            return VIDEO_DELAY_MS
+            return AUDIO_DELAY_MS
         try:
             sync_ms = int(raw_sync)
         except ValueError:
@@ -702,6 +687,12 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_mjpeg(stream)
 
         elif path == "/audio":
+            raw_sync = qs.get("sync", [None])[0]
+            try:
+                sync_ms = self._parse_sync_ms(raw_sync)
+            except ValueError as e:
+                self._error(400, str(e))
+                return
             sid = qs.get("sid", [None])[0]
             stream = None
             if sid:
@@ -722,7 +713,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 video_url = unquote(raw_url)
                 stream = registry.get_or_create(video_url, quality=quality)
-            self._serve_audio(stream)
+            self._serve_audio(stream, sync_ms=sync_ms)
 
         else:
             self._error(404, "Not found")
@@ -790,10 +781,22 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             log.info(f"[{stream.id}] Client disconnected: {self.client_address[0]}")
 
-    def _serve_audio(self, stream: Stream):
+    def _serve_audio(self, stream: Stream, sync_ms: int = AUDIO_DELAY_MS):
         yt_proc = None
         ff_proc = None
         try:
+            # Wait briefly for video pipeline start so audio aligns to the same
+            # stream session timeline instead of starting independently.
+            wait_deadline = time.time() + 5
+            while stream.started_at is None and stream.status == "starting" and time.time() < wait_deadline:
+                time.sleep(0.05)
+
+            if stream.started_at is not None:
+                target = stream.started_at + (sync_ms / 1000.0)
+                delay = target - time.time()
+                if delay > 0:
+                    time.sleep(delay)
+
             yt_cmd = [
                 "yt-dlp",
                 "--no-playlist",
