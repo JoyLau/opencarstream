@@ -346,8 +346,13 @@ STATUS_HTML = """<!DOCTYPE html>
   *{margin:0;padding:0;box-sizing:border-box;}
   body{background:var(--dark);color:var(--text);font-family:'Rajdhani',sans-serif;font-size:17px;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:40px 20px;}
   h1{font-family:'Orbitron',monospace;font-weight:900;font-size:2rem;color:var(--red);letter-spacing:.12em;text-shadow:0 0 24px rgba(227,25,55,.45);margin-bottom:6px;}
-  .sub{color:var(--muted);font-size:.9rem;letter-spacing:.08em;text-transform:uppercase;margin-bottom:40px;}
-  .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;width:100%;max-width:760px;padding:28px 32px;margin-bottom:20px;}
+  .sub{color:var(--muted);font-size:.9rem;letter-spacing:.08em;text-transform:uppercase;margin-bottom:28px;}
+  .tabs{display:flex;gap:6px;margin-bottom:20px;width:100%;max-width:760px;}
+  .tab-btn{font-family:'Orbitron',monospace;font-size:.75rem;letter-spacing:.1em;padding:8px 20px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;transition:all .15s;}
+  .tab-btn.active{background:var(--red);color:#fff;border-color:var(--red);}
+  .tab-panel{display:none;width:100%;max-width:760px;}
+  .tab-panel.active{display:block;}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;width:100%;padding:28px 32px;margin-bottom:20px;}
   .card h2{font-family:'Orbitron',monospace;font-size:.85rem;letter-spacing:.15em;color:var(--muted);margin-bottom:18px;text-transform:uppercase;}
   .usage{font-family:monospace;font-size:.95rem;background:#0d0d14;border:1px solid var(--border);border-radius:6px;padding:14px 18px;line-height:1.9;word-break:break-all;}
   .usage span{color:var(--red);}
@@ -363,20 +368,40 @@ STATUS_HTML = """<!DOCTYPE html>
   .env-row{display:flex;gap:24px;flex-wrap:wrap;margin-top:4px;}
   .env-item{font-family:monospace;font-size:.85rem;color:var(--muted);}
   .env-item b{color:var(--text);}
+  /* Feed tab */
+  .feed-controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:18px;}
+  .feed-controls input{flex:1;min-width:220px;background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-family:monospace;font-size:.95rem;}
+  .feed-controls button{background:var(--red);color:white;border:0;border-radius:6px;padding:10px 16px;font-family:'Orbitron',monospace;letter-spacing:.08em;cursor:pointer;white-space:nowrap;}
+  .feed-status{color:var(--muted);font-size:.9rem;font-style:italic;margin-bottom:10px;min-height:1.4em;}
+  .feed-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px;}
+  .feed-card{background:#0d0d14;border:1px solid var(--border);border-radius:8px;overflow:hidden;cursor:pointer;transition:border-color .15s;}
+  .feed-card:hover{border-color:var(--red);}
+  .feed-thumb{width:100%;aspect-ratio:16/9;object-fit:cover;background:#1a1a24;display:block;}
+  .feed-info{padding:8px 10px;}
+  .feed-title{font-size:.85rem;line-height:1.3;color:var(--text);margin-bottom:4px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+  .feed-dur{font-family:monospace;font-size:.75rem;color:var(--muted);}
+  /* shared input style for start-stream row */
+  #yt-id{flex:1;min-width:280px;background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-family:monospace;}
+  select{background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-family:monospace;}
 </style>
 </head>
 <body>
 <h1>TESLA STREAMER</h1>
 <p class="sub">MJPEG video relay for Tesla browser</p>
 
-<div class="card">
-  <h2>Start stream</h2>
-  <div class="usage" style="line-height:1.5;">
+<div class="tabs">
+  <button class="tab-btn active" data-tab="stream">Stream</button>
+  <button class="tab-btn" data-tab="feed">Channel Feed</button>
+  <button class="tab-btn" data-tab="info">Info</button>
+</div>
+
+<!-- ── Stream tab ── -->
+<div class="tab-panel active" id="tab-stream">
+  <div class="card">
+    <h2>Start stream</h2>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-      <input id="yt-id" type="text" placeholder="YouTube video ID (e.g. dQw4w9WgXcQ)"
-             style="flex:1;min-width:280px;background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-family:monospace;">
-      <select id="yt-quality"
-              style="background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-family:monospace;">
+      <input id="yt-id" type="text" placeholder="YouTube video ID (e.g. dQw4w9WgXcQ)">
+      <select id="yt-quality">
         <option value="">Auto quality</option>
         <option value="1080">1080p</option>
         <option value="720">720p</option>
@@ -385,8 +410,7 @@ STATUS_HTML = """<!DOCTYPE html>
         <option value="240">240p</option>
         <option value="144">144p</option>
       </select>
-      <select id="yt-sync"
-              style="background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-family:monospace;">
+      <select id="yt-sync">
         <option value="0" selected>Video delay: 0 s (default)</option>
         <option value="500">Video delay: 0.5 s</option>
         <option value="1000">Video delay: 1 s</option>
@@ -401,64 +425,185 @@ STATUS_HTML = """<!DOCTYPE html>
       </button>
     </div>
   </div>
-</div>
 
-<div class="card">
-  <h2>Usage</h2>
-  <div class="usage">
-    GET /watch<span>?url=</span>https://youtube.com/watch?v=VIDEO_ID<br>
-    GET /watch<span>?url=</span>https://youtube.com/watch?v=VIDEO_ID<span>&amp;quality=720&amp;sync=4000</span><br>
-    GET /health   → JSON health check<br>
-    GET /status   → JSON active streams
+  <div class="card">
+    <h2>Active streams ({{stream_count}})</h2>
+    {{streams_html}}
+  </div>
+
+  <div class="card">
+    <h2>Configuration</h2>
+    <div class="env-row">
+      <div class="env-item">FPS <b>{{fps}}</b></div>
+      <div class="env-item">Quality <b>{{quality}}</b></div>
+      <div class="env-item">Resolution <b>{{width}}×{{height}}</b></div>
+      <div class="env-item">Max streams <b>{{max_streams}}</b></div>
+      <div class="env-item">Audio start delay <b>{{audio_delay_ms}} ms</b></div>
+    </div>
   </div>
 </div>
 
-<div class="card">
-  <h2>Active streams ({{stream_count}})</h2>
-  {{streams_html}}
+<!-- ── Feed tab ── -->
+<div class="tab-panel" id="tab-feed">
+  <div class="card">
+    <h2>Channel recent uploads</h2>
+    <div class="feed-controls">
+      <input id="feed-channel" type="text" placeholder="@channelhandle or channel URL">
+      <select id="feed-quality">
+        <option value="">Auto quality</option>
+        <option value="1080">1080p</option>
+        <option value="720">720p</option>
+        <option value="480">480p</option>
+        <option value="360">360p</option>
+        <option value="240">240p</option>
+        <option value="144">144p</option>
+      </select>
+      <select id="feed-sync">
+        <option value="0" selected>Delay: 0 s</option>
+        <option value="500">Delay: 0.5 s</option>
+        <option value="1000">Delay: 1 s</option>
+        <option value="1500">Delay: 1.5 s</option>
+        <option value="2000">Delay: 2 s</option>
+        <option value="2500">Delay: 2.5 s</option>
+        <option value="3000">Delay: 3 s</option>
+      </select>
+      <button id="feed-go">LOAD FEED</button>
+    </div>
+    <div class="feed-status" id="feed-status"></div>
+    <div class="feed-grid" id="feed-grid"></div>
+  </div>
 </div>
 
-<div class="card">
-  <h2>Configuration</h2>
-  <div class="env-row">
-    <div class="env-item">FPS <b>{{fps}}</b></div>
-    <div class="env-item">Quality <b>{{quality}}</b></div>
-    <div class="env-item">Resolution <b>{{width}}×{{height}}</b></div>
-    <div class="env-item">Max streams <b>{{max_streams}}</b></div>
-    <div class="env-item">Audio start delay <b>{{audio_delay_ms}} ms</b></div>
+<!-- ── Info tab ── -->
+<div class="tab-panel" id="tab-info">
+  <div class="card">
+    <h2>API usage</h2>
+    <div class="usage">
+      GET /watch<span>?url=</span>https://youtube.com/watch?v=VIDEO_ID<br>
+      GET /watch<span>?url=</span>https://youtube.com/watch?v=VIDEO_ID<span>&amp;quality=720&amp;sync=4000</span><br>
+      GET /feed<span>?channel=</span>@handle<span>&amp;limit=12</span>  → JSON video list<br>
+      GET /health   → JSON health check<br>
+      GET /status   → JSON active streams
+    </div>
   </div>
 </div>
 
 <script>
 (function () {
-  var idInput = document.getElementById("yt-id");
-  var qualitySelect = document.getElementById("yt-quality");
-  var syncSelect = document.getElementById("yt-sync");
-  var goButton = document.getElementById("go-stream");
-  syncSelect.value = "{{audio_delay_ms}}";
+  // ── Tab switching ──
+  var tabBtns = document.querySelectorAll(".tab-btn");
+  var tabPanels = document.querySelectorAll(".tab-panel");
+  tabBtns.forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var target = btn.getAttribute("data-tab");
+      tabBtns.forEach(function (b) { b.classList.remove("active"); });
+      tabPanels.forEach(function (p) { p.classList.remove("active"); });
+      btn.classList.add("active");
+      document.getElementById("tab-" + target).classList.add("active");
+    });
+  });
+
+  // ── Stream tab ──
+  var idInput     = document.getElementById("yt-id");
+  var qualitySel  = document.getElementById("yt-quality");
+  var syncSel     = document.getElementById("yt-sync");
+  var goButton    = document.getElementById("go-stream");
+  syncSel.value   = "{{audio_delay_ms}}";
+
+  function buildWatchUrl(videoUrl, quality, sync) {
+    var target = "/watch?url=" + encodeURIComponent(videoUrl);
+    if (quality) target += "&quality=" + encodeURIComponent(quality);
+    if (sync)    target += "&sync="    + encodeURIComponent(sync);
+    return target;
+  }
 
   function openStream() {
     var id = (idInput.value || "").trim();
-    if (!id) {
-      idInput.focus();
-      return;
-    }
+    if (!id) { idInput.focus(); return; }
     var url = "https://www.youtube.com/watch?v=" + encodeURIComponent(id);
-    var quality = (qualitySelect.value || "").trim();
-    var sync = (syncSelect.value || "1200").trim();
-    var target = "/watch?url=" + encodeURIComponent(url);
-    if (quality) target += "&quality=" + encodeURIComponent(quality);
-    if (sync) target += "&sync=" + encodeURIComponent(sync);
-    window.location.href = target;
+    window.location.href = buildWatchUrl(url, qualitySel.value, syncSel.value);
   }
 
   goButton.addEventListener("click", openStream);
   idInput.addEventListener("keydown", function (e) {
-    var eventObj = e || window.event;
-    var key = eventObj.key || "";
-    if (key === "Enter" || eventObj.keyCode === 13) {
-      openStream();
-    }
+    if ((e.key || "") === "Enter" || e.keyCode === 13) openStream();
+  });
+
+  // ── Feed tab ──
+  var feedChannel = document.getElementById("feed-channel");
+  var feedQuality = document.getElementById("feed-quality");
+  var feedSync    = document.getElementById("feed-sync");
+  var feedGoBtn   = document.getElementById("feed-go");
+  var feedStatus  = document.getElementById("feed-status");
+  var feedGrid    = document.getElementById("feed-grid");
+  feedSync.value  = "{{audio_delay_ms}}";
+
+  function fmtDuration(secs) {
+    var s = parseInt(secs, 10);
+    if (!s || isNaN(s)) return "";
+    var h = Math.floor(s / 3600);
+    var m = Math.floor((s % 3600) / 60);
+    var sec = s % 60;
+    if (h > 0) return h + ":" + pad(m) + ":" + pad(sec);
+    return m + ":" + pad(sec);
+  }
+
+  function pad(n) { return n < 10 ? "0" + n : "" + n; }
+
+  function loadFeed() {
+    var ch = (feedChannel.value || "").trim();
+    if (!ch) { feedChannel.focus(); return; }
+    feedStatus.textContent = "Loading…";
+    feedGrid.innerHTML = "";
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/feed?channel=" + encodeURIComponent(ch) + "&limit=12", true);
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) return;
+      if (xhr.status < 200 || xhr.status >= 300) {
+        feedStatus.textContent = "Error: " + xhr.status;
+        return;
+      }
+      var data;
+      try { data = JSON.parse(xhr.responseText); } catch (e) {
+        feedStatus.textContent = "Failed to parse response.";
+        return;
+      }
+      if (data.error) {
+        feedStatus.textContent = "Error: " + data.error;
+        return;
+      }
+      var videos = data.videos || [];
+      if (!videos.length) {
+        feedStatus.textContent = "No videos found for that channel.";
+        return;
+      }
+      feedStatus.textContent = videos.length + " recent videos";
+      videos.forEach(function (v) {
+        var card = document.createElement("div");
+        card.className = "feed-card";
+        var dur = fmtDuration(v.duration);
+        card.innerHTML =
+          '<img class="feed-thumb" src="' + (v.thumb || "") + '" loading="lazy" alt="">' +
+          '<div class="feed-info">' +
+          '<div class="feed-title">' + escHtml(v.title) + '</div>' +
+          (dur ? '<div class="feed-dur">' + escHtml(dur) + '</div>' : '') +
+          '</div>';
+        card.addEventListener("click", function () {
+          window.location.href = buildWatchUrl(v.url, feedQuality.value, feedSync.value);
+        });
+        feedGrid.appendChild(card);
+      });
+    };
+    xhr.send();
+  }
+
+  function escHtml(s) {
+    return (s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+
+  feedGoBtn.addEventListener("click", loadFeed);
+  feedChannel.addEventListener("keydown", function (e) {
+    if ((e.key || "") === "Enter" || e.keyCode === 13) loadFeed();
   });
 })();
 </script>
@@ -643,6 +788,20 @@ class Handler(BaseHTTPRequestHandler):
             data = [s.to_dict() for s in registry.all_streams()]
             self._json({"streams": data})
 
+        elif path == "/feed":
+            channel = qs.get("channel", [None])[0]
+            if not channel:
+                self._error(400, "Missing ?channel= parameter")
+                return
+            limit = 12
+            try:
+                raw_limit = qs.get("limit", [None])[0]
+                if raw_limit:
+                    limit = max(1, min(int(raw_limit), 50))
+            except (ValueError, TypeError):
+                pass
+            self._serve_feed(channel.strip(), limit)
+
         elif path == "/stream_status":
             sid = qs.get("sid", [None])[0]
             if not sid:
@@ -734,6 +893,62 @@ class Handler(BaseHTTPRequestHandler):
 
         else:
             self._error(404, "Not found")
+
+    # ── Feed ──────────────────────────────────────────────────────────────────
+    def _serve_feed(self, channel: str, limit: int):
+        # Normalise: bare handle (@channel), channel URL, or plain name
+        if channel.startswith("http://") or channel.startswith("https://"):
+            url = channel
+        elif channel.startswith("@"):
+            url = f"https://www.youtube.com/{channel}/videos"
+        else:
+            url = f"https://www.youtube.com/@{channel}/videos"
+
+        try:
+            r = subprocess.run(
+                [
+                    "yt-dlp",
+                    "--flat-playlist",
+                    "--playlist-end", str(limit),
+                    "--print", "%(id)s\t%(title)s\t%(duration)s\t%(thumbnail)s",
+                    "--no-warnings",
+                    "--quiet",
+                    url,
+                ],
+                capture_output=True, text=True, timeout=20,
+            )
+        except subprocess.TimeoutExpired:
+            self._error(504, "yt-dlp timed out fetching feed")
+            return
+        except Exception as e:
+            self._error(500, f"Feed fetch failed: {e}")
+            return
+
+        if r.returncode != 0:
+            err = r.stderr.strip() or "yt-dlp returned non-zero exit code"
+            self._error(502, f"Could not fetch channel feed: {err}")
+            return
+
+        videos = []
+        for line in r.stdout.strip().splitlines():
+            parts = line.split("\t", 3)
+            if len(parts) < 2:
+                continue
+            vid_id   = parts[0].strip()
+            title    = parts[1].strip()
+            duration = parts[2].strip() if len(parts) > 2 else ""
+            thumb    = parts[3].strip() if len(parts) > 3 else ""
+            if not vid_id or vid_id == "NA":
+                continue
+            videos.append({
+                "id":       vid_id,
+                "title":    title,
+                "duration": duration,
+                "thumb":    thumb,
+                "url":      f"https://www.youtube.com/watch?v={vid_id}",
+            })
+
+        self._json({"channel": url, "videos": videos})
 
     # ── MJPEG ─────────────────────────────────────────────────────────────────
     def _serve_mjpeg(self, stream: Stream):
