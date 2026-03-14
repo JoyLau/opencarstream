@@ -1,5 +1,6 @@
 __pycache__/
 cookies.txt
+subscriptions.json
 *.pyc
 .env
 tmp/

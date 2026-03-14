@@ -35,6 +35,7 @@ STREAM_WIDTH  = int(os.environ.get("STREAM_WIDTH", "1920"))
 STREAM_HEIGHT = int(os.environ.get("STREAM_HEIGHT", "1080"))
 MAX_STREAMS   = int(os.environ.get("MAX_STREAMS", "3"))       # concurrent stream slots
 AUDIO_DELAY_MS= int(os.environ.get("AUDIO_DELAY_MS", "0"))   # ms to delay video start after audio, to keep streams in sync
+SUBSCRIPTIONS_FILE = os.environ.get("SUBSCRIPTIONS_FILE", "/subscriptions.json")
 
 
 # ── Per-stream state ──────────────────────────────────────────────────────────
@@ -438,17 +439,17 @@ STATUS_HTML = """<!DOCTYPE html>
       <div class="env-item">Quality <b>{{quality}}</b></div>
       <div class="env-item">Resolution <b>{{width}}×{{height}}</b></div>
       <div class="env-item">Max streams <b>{{max_streams}}</b></div>
-      <div class="env-item">Audio start delay <b>{{audio_delay_ms}} ms</b></div>
-    </div>
+    <div class="env-item">Audio start delay <b>{{audio_delay_ms}} ms</b></div>
+    <div class="env-item">Subscriptions <b>{{subs_status}}</b></div>
   </div>
+</div>
 </div>
 
 <!-- ── Feed tab ── -->
 <div class="tab-panel" id="tab-feed">
   <div class="card">
-    <h2>Channel recent uploads</h2>
-    <div class="feed-controls">
-      <input id="feed-channel" type="text" placeholder="@channelhandle or channel URL">
+    <h2>Playback options</h2>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
       <select id="feed-quality">
         <option value="">Auto quality</option>
         <option value="1080">1080p</option>
@@ -467,6 +468,26 @@ STATUS_HTML = """<!DOCTYPE html>
         <option value="2500">Delay: 2.5 s</option>
         <option value="3000">Delay: 3 s</option>
       </select>
+    </div>
+  </div>
+
+  <!-- Subscriptions panel (shown when cookies available) -->
+  <div class="card" id="subs-card" style="display:none;">
+    <h2>My subscriptions</h2>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
+      <button id="subs-load" style="background:var(--red);color:white;border:0;border-radius:6px;padding:8px 16px;font-family:'Orbitron',monospace;letter-spacing:.08em;cursor:pointer;">LOAD SUBSCRIPTIONS</button>
+      <input id="subs-filter" type="text" placeholder="Filter channels…"
+             style="flex:1;min-width:180px;background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:monospace;display:none;">
+    </div>
+    <div class="feed-status" id="subs-status"></div>
+    <div id="subs-list" style="display:flex;flex-direction:column;gap:0;"></div>
+  </div>
+
+  <!-- Manual channel lookup -->
+  <div class="card">
+    <h2 id="feed-card-title">Channel recent uploads</h2>
+    <div class="feed-controls">
+      <input id="feed-channel" type="text" placeholder="@channelhandle or channel URL">
       <button id="feed-go">LOAD FEED</button>
     </div>
     <div class="feed-status" id="feed-status"></div>
@@ -482,6 +503,7 @@ STATUS_HTML = """<!DOCTYPE html>
       GET /watch<span>?url=</span>https://youtube.com/watch?v=VIDEO_ID<br>
       GET /watch<span>?url=</span>https://youtube.com/watch?v=VIDEO_ID<span>&amp;quality=720&amp;sync=4000</span><br>
       GET /feed<span>?channel=</span>@handle<span>&amp;limit=12</span>  → JSON video list<br>
+      GET /subscriptions  → JSON channel list (requires cookies.txt)<br>
       GET /health   → JSON health check<br>
       GET /status   → JSON active streams
     </div>
@@ -530,13 +552,96 @@ STATUS_HTML = """<!DOCTYPE html>
   });
 
   // ── Feed tab ──
-  var feedChannel = document.getElementById("feed-channel");
-  var feedQuality = document.getElementById("feed-quality");
-  var feedSync    = document.getElementById("feed-sync");
-  var feedGoBtn   = document.getElementById("feed-go");
-  var feedStatus  = document.getElementById("feed-status");
-  var feedGrid    = document.getElementById("feed-grid");
-  feedSync.value  = "{{audio_delay_ms}}";
+  var feedChannel  = document.getElementById("feed-channel");
+  var feedQuality  = document.getElementById("feed-quality");
+  var feedSync     = document.getElementById("feed-sync");
+  var feedGoBtn    = document.getElementById("feed-go");
+  var feedStatus   = document.getElementById("feed-status");
+  var feedGrid     = document.getElementById("feed-grid");
+  var feedCardTitle= document.getElementById("feed-card-title");
+  feedSync.value   = "{{audio_delay_ms}}";
+
+  // Subscriptions
+  var subsCard   = document.getElementById("subs-card");
+  var subsLoad   = document.getElementById("subs-load");
+  var subsFilter = document.getElementById("subs-filter");
+  var subsStatus = document.getElementById("subs-status");
+  var subsList   = document.getElementById("subs-list");
+  var allChannels = [];
+
+  // Probe whether subscriptions.json is mounted; show panel if so
+  (function probeSubscriptions() {
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/subscriptions", true);
+    xhr.timeout = 2000;
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) return;
+      if (xhr.status !== 503) {
+        subsCard.style.display = "block";
+      }
+    };
+    xhr.send();
+  })();
+
+  function renderChannelList(channels) {
+    subsList.innerHTML = "";
+    channels.forEach(function (ch) {
+      var row = document.createElement("div");
+      row.className = "stream-row";
+      row.style.cursor = "pointer";
+      row.innerHTML = '<a style="color:var(--text);font-size:.95rem;">' + escHtml(ch.name) + '</a>' +
+                      '<span style="font-family:monospace;font-size:.75rem;color:var(--muted);">LOAD →</span>';
+      row.addEventListener("click", function () {
+        feedChannel.value = ch.url;
+        feedCardTitle.textContent = ch.name + " — recent uploads";
+        loadFeed();
+        // Scroll to feed card
+        feedGrid.scrollIntoView({behavior: "smooth", block: "start"});
+      });
+      subsList.appendChild(row);
+    });
+  }
+
+  function applyFilter() {
+    var q = (subsFilter.value || "").toLowerCase().trim();
+    if (!q) { renderChannelList(allChannels); return; }
+    renderChannelList(allChannels.filter(function (ch) {
+      return ch.name.toLowerCase().indexOf(q) !== -1;
+    }));
+  }
+
+  subsLoad.addEventListener("click", function () {
+    subsStatus.textContent = "Loading subscriptions…";
+    subsList.innerHTML = "";
+    subsFilter.style.display = "none";
+    subsLoad.disabled = true;
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/subscriptions", true);
+    xhr.timeout = 45000;
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) return;
+      subsLoad.disabled = false;
+      var data;
+      try { data = JSON.parse(xhr.responseText); } catch (e) {
+        subsStatus.textContent = "Failed to parse response."; return;
+      }
+      if (data.error) {
+        subsStatus.textContent = "Error: " + data.error; return;
+      }
+      allChannels = data.channels || [];
+      if (!allChannels.length) {
+        subsStatus.textContent = "No subscriptions found."; return;
+      }
+      var syncedAt = data.synced_at ? " · synced " + data.synced_at.slice(0, 10) : "";
+      subsStatus.textContent = allChannels.length + " channels" + syncedAt;
+      subsFilter.style.display = "";
+      subsFilter.value = "";
+      renderChannelList(allChannels);
+    };
+    xhr.send();
+  });
+
+  subsFilter.addEventListener("input", applyFilter);
 
   function fmtDuration(secs) {
     var s = parseInt(secs, 10);
@@ -557,6 +662,7 @@ STATUS_HTML = """<!DOCTYPE html>
     feedGrid.innerHTML = "";
     var xhr = new XMLHttpRequest();
     xhr.open("GET", "/feed?channel=" + encodeURIComponent(ch) + "&limit=12", true);
+    xhr.timeout = 30000;
     xhr.onreadystatechange = function () {
       if (xhr.readyState !== 4) return;
       if (xhr.status < 200 || xhr.status >= 300) {
@@ -578,6 +684,7 @@ STATUS_HTML = """<!DOCTYPE html>
         return;
       }
       feedStatus.textContent = videos.length + " recent videos";
+      feedGrid.innerHTML = "";
       videos.forEach(function (v) {
         var card = document.createElement("div");
         card.className = "feed-card";
@@ -720,6 +827,7 @@ def render_status_page() -> str:
             )
         streams_html = "\n".join(rows)
 
+    subs_status = "loaded" if os.path.isfile(SUBSCRIPTIONS_FILE) else "not mounted"
     return (STATUS_HTML
             .replace("{{stream_count}}", str(len(streams)))
             .replace("{{streams_html}}", streams_html)
@@ -728,7 +836,8 @@ def render_status_page() -> str:
             .replace("{{width}}", str(STREAM_WIDTH))
             .replace("{{height}}", str(STREAM_HEIGHT))
             .replace("{{max_streams}}", str(MAX_STREAMS))
-            .replace("{{audio_delay_ms}}", str(AUDIO_DELAY_MS)))
+            .replace("{{audio_delay_ms}}", str(AUDIO_DELAY_MS))
+            .replace("{{subs_status}}", subs_status))
 
 def render_watch_page(stream_id: str, sync_ms: int) -> str:
     return (WATCH_HTML
@@ -801,6 +910,9 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, TypeError):
                 pass
             self._serve_feed(channel.strip(), limit)
+
+        elif path == "/subscriptions":
+            self._serve_subscriptions()
 
         elif path == "/stream_status":
             sid = qs.get("sid", [None])[0]
@@ -893,6 +1005,23 @@ class Handler(BaseHTTPRequestHandler):
 
         else:
             self._error(404, "Not found")
+
+    # ── Subscriptions ─────────────────────────────────────────────────────────
+    def _serve_subscriptions(self):
+        if not os.path.isfile(SUBSCRIPTIONS_FILE):
+            self._error(503, f"Subscriptions file not found at {SUBSCRIPTIONS_FILE}. "
+                            "Run sync_subscriptions.py and mount the resulting JSON.")
+            return
+        try:
+            with open(SUBSCRIPTIONS_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            self._error(500, f"Failed to read subscriptions file: {e}")
+            return
+        self._json({
+            "synced_at": data.get("synced_at", ""),
+            "channels":  data.get("channels", []),
+        })
 
     # ── Feed ──────────────────────────────────────────────────────────────────
     def _serve_feed(self, channel: str, limit: int):
