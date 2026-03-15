@@ -26,6 +26,25 @@ logging.basicConfig(
 )
 log = logging.getLogger("streamer")
 
+
+def _parse_lang_map(raw: str) -> dict[str, str]:
+    """
+    Parse env mapping in format: "es:ES,en:US" or "en:8.8.8.8".
+    Keys are normalized to lowercase language codes.
+    """
+    result: dict[str, str] = {}
+    for part in (raw or "").split(","):
+        item = part.strip()
+        if not item or ":" not in item:
+            continue
+        lang, value = item.split(":", 1)
+        lang = lang.strip().lower()
+        value = value.strip()
+        if lang and value:
+            result[lang] = value
+    return result
+
+
 # ── Config (override via env vars) ────────────────────────────────────────────
 HOST          = os.environ.get("HOST", "0.0.0.0")
 PORT          = int(os.environ.get("PORT", "8080"))
@@ -39,6 +58,13 @@ SUBSCRIPTIONS_FILE  = os.environ.get("SUBSCRIPTIONS_FILE", "/subscriptions.json"
 # Comma-separated list of Pluto TV language codes to load, e.g. "es,en"
 PLUTO_LANGS         = [l.strip() for l in os.environ.get("PLUTO_LANGS", "es,en").split(",") if l.strip()]
 PLUTO_REFRESH_SECS  = int(os.environ.get("PLUTO_REFRESH_SECS", str(60 * 60)))  # 1 h
+PLUTO_APP_VERSION   = os.environ.get("PLUTO_APP_VERSION", "7")
+# Maps UI language -> Pluto marketing region (country code).
+# Default keeps Spanish in ES and routes English to US lineup.
+PLUTO_REGION_MAP    = _parse_lang_map(os.environ.get("PLUTO_REGION_MAP", "es:ES,en:US"))
+# Optional language -> X-Forwarded-For IP used for boot/channels requests.
+# This helps force region-specific lineups when server IP geo differs.
+PLUTO_XFF_MAP       = _parse_lang_map(os.environ.get("PLUTO_XFF_MAP", "en:8.8.8.8"))
 
 
 # ── Per-stream state ──────────────────────────────────────────────────────────
@@ -172,26 +198,97 @@ class PlutoCache:
         with self._lock:
             return list(self._by_lang.get(lang, [])), self._errors.get(lang, "")
 
+    def get_meta(self, lang: str) -> dict[str, str | int]:
+        """Return metadata for a language cache entry."""
+        from urllib.parse import parse_qsl
+        region, xff = self._lang_context(lang)
+        with self._lock:
+            sess = self._sessions.get(lang)
+        if not sess:
+            return {"country": "", "refresh_at": 0, "region": region, "xff": xff}
+        _, stitcher_params, refresh_at = sess
+        country = ""
+        for key, val in parse_qsl(stitcher_params, keep_blank_values=True):
+            if key == "country":
+                country = val
+                break
+        return {
+            "country": country,
+            "refresh_at": int(refresh_at),
+            "region": region,
+            "xff": xff,
+        }
+
     def langs(self) -> list[str]:
         with self._lock:
             return list(self._by_lang.keys())
 
+    @staticmethod
+    def _lang_context(lang: str) -> tuple[str, str]:
+        lang_key = (lang or "").strip().lower()
+        region = PLUTO_REGION_MAP.get(lang_key, lang_key.upper() or "US")
+        xff = PLUTO_XFF_MAP.get(lang_key, "")
+        return region, xff
+
+    @staticmethod
+    def _apply_stitcher_params(hls_url: str, stitcher_params: str) -> str:
+        """Merge Pluto stitcher query params into the channel HLS URL."""
+        from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+        parts = urlsplit(hls_url)
+        merged = dict(parse_qsl(parts.query, keep_blank_values=True))
+        for k, v in parse_qsl(stitcher_params, keep_blank_values=True):
+            merged[k] = v
+        query = urlencode(merged, doseq=True)
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, query, ""))
+
+    def build_channel_url(
+        self, lang: str, channel_id: str, force_refresh: bool = False
+    ) -> tuple[str | None, str]:
+        """
+        Build a fresh Pluto playback URL for channel_id in lang.
+        Returns (url, err). When url is None, err describes the failure.
+        """
+        if not channel_id:
+            return None, "missing channel id"
+
+        if force_refresh:
+            self._fetch_lang(lang)
+
+        with self._lock:
+            channels = self._by_lang.get(lang, [])
+            sess = self._sessions.get(lang)
+            channel = next((c for c in channels if c.get("id") == channel_id), None)
+
+        if channel is None:
+            return None, f"channel '{channel_id}' not found for lang '{lang}'"
+        if not sess:
+            return None, f"Pluto TV [{lang}] session unavailable"
+
+        _, stitcher_params, _ = sess
+        hls_url = channel.get("hls_url", "")
+        if not hls_url:
+            return None, "channel has no HLS URL"
+        return self._apply_stitcher_params(hls_url, stitcher_params), ""
+
     def _boot(self, lang: str) -> tuple[str, str, int] | None:
         """Call Pluto boot API and return (device_id, stitcher_params, refresh_in_sec)."""
         import urllib.request, uuid
-        region = lang.upper()
+        region, xff = self._lang_context(lang)
         device_id = str(uuid.uuid4())
         url = (
             f"https://boot.pluto.tv/v4/start"
-            f"?appName=web&appVersion=7.7.0-a9f8f90e"
+            f"?appName=web&appVersion={PLUTO_APP_VERSION}"
             f"&deviceDNT=0&deviceId={device_id}&deviceMake=Chrome"
             f"&deviceModel=web&deviceType=web&deviceVersion=unknown"
             f"&clientModelNumber=na&serverSideAds=false"
             f"&marketingRegion={region}&clientID={device_id}"
         )
         try:
+            headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+            if xff:
+                headers["X-Forwarded-For"] = xff
             req = urllib.request.Request(
-                url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+                url, headers=headers
             )
             with urllib.request.urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read().decode())
@@ -214,15 +311,18 @@ class PlutoCache:
             return
         device_id, stitcher_params, refresh_in = boot
 
-        region = lang.upper()
+        _, xff = self._lang_context(lang)
         api_url = (
             f"https://api.pluto.tv/v2/channels"
             f"?lang={lang}&deviceType=web&deviceId={device_id}"
-            f"&appName=web&appVersion=7&clientTime=0"
+            f"&appName=web&appVersion={PLUTO_APP_VERSION}&clientTime=0"
         )
         try:
+            headers = {"User-Agent": "Mozilla/5.0"}
+            if xff:
+                headers["X-Forwarded-For"] = xff
             req = urllib.request.Request(
-                api_url, headers={"User-Agent": "Mozilla/5.0"}
+                api_url, headers=headers
             )
             with urllib.request.urlopen(req, timeout=15) as resp:
                 raw = json.loads(resp.read().decode())
@@ -237,18 +337,20 @@ class PlutoCache:
             if not ch.get("isStitched"):
                 continue
             urls = ch.get("stitched", {}).get("urls", [])
-            hls_base = next(
-                (u["url"].split("?")[0] for u in urls if u.get("type") == "hls"),
+            hls_url = next(
+                (u.get("url", "") for u in urls if u.get("type") == "hls"),
                 None,
             )
-            if not hls_base:
+            if not hls_url:
                 continue
-            # Attach the valid session stitcherParams from the boot response
-            hls_url = f"{hls_base}?{stitcher_params}"
+            # Keep the original URL template and inject fresh stitcher params.
+            stitched_url = self._apply_stitcher_params(hls_url, stitcher_params)
             channels.append({
+                "id":       ch.get("_id", ""),
                 "name":     ch.get("name", ""),
                 "category": ch.get("category", ""),
-                "url":      hls_url,
+                "hls_url":  hls_url,
+                "url":      stitched_url,
             })
         channels.sort(key=lambda c: (c["category"], c["name"]))
 
@@ -257,8 +359,12 @@ class PlutoCache:
             self._errors.pop(lang, None)
             self._sessions[lang] = (device_id, stitcher_params,
                                     time.time() + refresh_in)
-        log.info(f"Pluto TV [{lang}]: loaded {len(channels)} channels "
-                 f"(refresh in {refresh_in//3600}h)")
+        meta = self.get_meta(lang)
+        log.info(
+            f"Pluto TV [{lang}] region={meta.get('region')} country={meta.get('country')} "
+            f"xff={meta.get('xff') or '-'}: loaded {len(channels)} channels "
+            f"(refresh in {refresh_in//3600}h)"
+        )
 
     def refresh_all(self):
         for lang in PLUTO_LANGS:
@@ -322,13 +428,33 @@ _BROWSER_UA = (
 
 def _direct_input_args(url: str) -> list[str]:
     """ffmpeg input flags for a direct stream URL."""
+    from urllib.parse import urlparse, parse_qs
     if _is_acestream(url):
         return ["-timeout", "10000000"]
-    return [
-        "-user_agent", _BROWSER_UA,
-        "-headers", "Referer: https://pluto.tv/\r\n",
-        "-re",
-    ]
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    headers = ""
+    if "pluto.tv" in host:
+        country = (parse_qs(parsed.query).get("country", [""])[0] or "").upper()
+        xff = ""
+        if country:
+            for lang_code, region_code in PLUTO_REGION_MAP.items():
+                if region_code.upper() == country:
+                    xff = PLUTO_XFF_MAP.get(lang_code, "")
+                    if xff:
+                        break
+        headers = (
+            "Referer: https://pluto.tv/\r\n"
+            "Origin: https://pluto.tv\r\n"
+            "Accept-Language: en-US,en;q=0.9\r\n"
+        )
+        if xff:
+            headers += f"X-Forwarded-For: {xff}\r\n"
+    args = ["-user_agent", _BROWSER_UA]
+    if headers:
+        args += ["-headers", headers]
+    args.append("-re")
+    return args
 
 
 def _start_audio_buffer(stream: Stream):
@@ -1141,6 +1267,7 @@ STATUS_HTML = """<!DOCTYPE html>
   plutoSync.value   = "{{audio_delay_ms}}";
 
   var plutoByLang   = {};   // { lang: [channels] }
+  var plutoMetaByLang = {}; // { lang: { country: "...", refresh_at: n } }
   var plutoActiveLang = null;
   var plutoLangs    = {{pluto_langs_json}};
 
@@ -1164,6 +1291,14 @@ STATUS_HTML = """<!DOCTYPE html>
         '<span style="font-size:.95rem;">' + escHtml(ch.name) + '</span>' +
         '<span style="font-family:monospace;font-size:.75rem;color:var(--muted);">LIVE \u2192</span>';
       row.addEventListener("click", function () {
+        if (ch.id && plutoActiveLang) {
+          window.location.href =
+            "/pluto_watch?lang=" + encodeURIComponent(plutoActiveLang) +
+            "&id=" + encodeURIComponent(ch.id) +
+            "&sync=" + encodeURIComponent(plutoSync.value);
+          return;
+        }
+        // Backwards fallback if id is missing.
         window.location.href = buildWatchUrl(ch.url, "", plutoSync.value);
       });
       plutoList.appendChild(row);
@@ -1172,6 +1307,7 @@ STATUS_HTML = """<!DOCTYPE html>
 
   function applyPlutoFilter() {
     var all = plutoByLang[plutoActiveLang] || [];
+    var meta = plutoMetaByLang[plutoActiveLang] || {};
     var q = (plutoFilter.value || "").toLowerCase().trim();
     var filtered = q
       ? all.filter(function (c) {
@@ -1180,8 +1316,27 @@ STATUS_HTML = """<!DOCTYPE html>
         })
       : all;
     renderPluto(filtered);
-    plutoStatus.textContent = filtered.length +
-      (q ? " of " + all.length : "") + " channels (no account required)";
+    var activeTag = plutoActiveLang ? plutoActiveLang.toUpperCase() : "?";
+    var countryTag = meta.country ? (" / " + meta.country.toUpperCase()) : "";
+    var regionTag = meta.region ? (" req:" + meta.region.toUpperCase()) : "";
+    var sameAs = "";
+    var activeSig = all.map(function (c) { return c.id || c.name; }).join("|");
+    if (activeSig) {
+      Object.keys(plutoByLang).forEach(function (otherLang) {
+        if (sameAs || otherLang === plutoActiveLang) return;
+        var otherSig = (plutoByLang[otherLang] || [])
+          .map(function (c) { return c.id || c.name; })
+          .join("|");
+        if (otherSig && otherSig === activeSig) {
+          sameAs = otherLang.toUpperCase();
+        }
+      });
+    }
+    var sameNote = sameAs ? (" · same lineup as " + sameAs + " in your region") : "";
+    plutoStatus.textContent =
+      "[" + activeTag + countryTag + regionTag + "] " +
+      filtered.length + (q ? " of " + all.length : "") +
+      " channels (no account required)" + sameNote;
   }
 
   function switchPlutoLang(lang) {
@@ -1210,6 +1365,12 @@ STATUS_HTML = """<!DOCTYPE html>
       }
       if (data.error) { plutoStatus.textContent = "Error: " + data.error; return; }
       plutoByLang[lang] = data.channels || [];
+      plutoMetaByLang[lang] = {
+        country: data.country || "",
+        region: data.region || "",
+        xff: data.xff || "",
+        refresh_at: data.refresh_at || 0
+      };
       if (plutoActiveLang === lang) applyPlutoFilter();
     };
     xhr.send();
@@ -1737,6 +1898,38 @@ class Handler(BaseHTTPRequestHandler):
             lang = qs.get("lang", [PLUTO_LANGS[0]])[0]
             self._serve_pluto_channels(lang)
 
+        elif path == "/pluto_watch":
+            lang = (qs.get("lang", [PLUTO_LANGS[0]])[0] or "").strip().lower()
+            channel_id = qs.get("id", [None])[0]
+            if not channel_id:
+                self._error(400, "Missing ?id= parameter")
+                return
+            raw_sync = qs.get("sync", [None])[0]
+            try:
+                sync_ms = self._parse_sync_ms(raw_sync)
+            except ValueError as e:
+                self._error(400, str(e))
+                return
+            if lang not in PLUTO_LANGS:
+                self._error(400, f"Unsupported Pluto lang '{lang}'")
+                return
+
+            # Refresh Pluto session tokens per playback launch to avoid stale
+            # signed URLs being rejected with fallback "unsupported device" streams.
+            pluto_url, err = pluto_cache.build_channel_url(
+                lang, channel_id, force_refresh=True
+            )
+            if not pluto_url:
+                self._error(502, f"Pluto TV stream unavailable: {err}")
+                return
+            registry.cleanup_done()
+            stream = registry.get_or_create(
+                pluto_url,
+                quality=None,
+                reuse_existing=False,
+            )
+            self._html(render_watch_page(stream.id, sync_ms))
+
         elif path == "/stream_status":
             sid = qs.get("sid", [None])[0]
             if not sid:
@@ -1855,7 +2048,15 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._error(503, "Pluto TV channel list not loaded yet, try again shortly")
             return
-        self._json({"lang": lang, "channels": channels})
+        meta = pluto_cache.get_meta(lang)
+        self._json({
+            "lang": lang,
+            "country": meta.get("country", ""),
+            "region": meta.get("region", ""),
+            "xff": meta.get("xff", ""),
+            "refresh_at": meta.get("refresh_at", 0),
+            "channels": channels,
+        })
 
     # ── Feed ──────────────────────────────────────────────────────────────────
     def _serve_feed(self, channel: str, limit: int):
