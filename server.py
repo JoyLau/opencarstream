@@ -1739,14 +1739,14 @@ STATUS_HTML = """<!DOCTYPE html>
     }
     iptvStatus.textContent = "Loading IPTV streams...";
     iptvStreamsEl.innerHTML = "";
-    iptvLoadBtn.disabled = true;
+    iptvRefreshBtn.disabled = true;
 
     var xhr = new XMLHttpRequest();
     xhr.open("GET", "/iptv_streams?list=" + encodeURIComponent(listId), true);
     xhr.timeout = 15000;
     xhr.onreadystatechange = function () {
       if (xhr.readyState !== 4) return;
-      iptvLoadBtn.disabled = false;
+      iptvRefreshBtn.disabled = false;
       var data;
       try { data = JSON.parse(xhr.responseText); } catch (e) {
         iptvStatus.textContent = "Failed to parse response."; return;
