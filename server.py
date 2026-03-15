@@ -35,7 +35,10 @@ STREAM_WIDTH  = int(os.environ.get("STREAM_WIDTH", "1920"))
 STREAM_HEIGHT = int(os.environ.get("STREAM_HEIGHT", "1080"))
 MAX_STREAMS   = int(os.environ.get("MAX_STREAMS", "3"))       # concurrent stream slots
 AUDIO_DELAY_MS= int(os.environ.get("AUDIO_DELAY_MS", "0"))   # ms to delay video start after audio, to keep streams in sync
-SUBSCRIPTIONS_FILE = os.environ.get("SUBSCRIPTIONS_FILE", "/subscriptions.json")
+SUBSCRIPTIONS_FILE  = os.environ.get("SUBSCRIPTIONS_FILE", "/subscriptions.json")
+# Comma-separated list of Pluto TV language codes to load, e.g. "es,en"
+PLUTO_LANGS         = [l.strip() for l in os.environ.get("PLUTO_LANGS", "es,en").split(",") if l.strip()]
+PLUTO_REFRESH_SECS  = int(os.environ.get("PLUTO_REFRESH_SECS", str(60 * 60)))  # 1 h
 
 
 # ── Per-stream state ──────────────────────────────────────────────────────────
@@ -143,6 +146,79 @@ class Registry:
 
 
 registry = Registry()
+
+
+# ── Pluto TV channel cache ─────────────────────────────────────────────────────
+class PlutoCache:
+    def __init__(self):
+        self._lock  = threading.Lock()
+        # { lang: [channel_dict, …] }
+        self._by_lang: dict[str, list[dict]] = {}
+        self._errors: dict[str, str] = {}
+
+    def get(self, lang: str) -> tuple[list[dict], str]:
+        with self._lock:
+            return list(self._by_lang.get(lang, [])), self._errors.get(lang, "")
+
+    def langs(self) -> list[str]:
+        with self._lock:
+            return list(self._by_lang.keys())
+
+    def _fetch_lang(self, lang: str):
+        import urllib.request
+        api_url = (
+            f"https://api.pluto.tv/v2/channels"
+            f"?lang={lang}&deviceType=web&deviceId=teslastreamer"
+            f"&appName=web&appVersion=7&clientTime=0"
+        )
+        try:
+            req = urllib.request.Request(
+                api_url, headers={"User-Agent": "Mozilla/5.0"}
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                raw = json.loads(resp.read().decode())
+        except Exception as e:
+            with self._lock:
+                self._errors[lang] = str(e)
+            log.warning(f"Pluto TV [{lang}] refresh failed: {e}")
+            return
+
+        channels = []
+        for ch in raw:
+            if not ch.get("isStitched"):
+                continue
+            urls = ch.get("stitched", {}).get("urls", [])
+            hls = next(
+                (u["url"].split("?")[0] for u in urls if u.get("type") == "hls"),
+                None,
+            )
+            if not hls:
+                continue
+            channels.append({
+                "name":     ch.get("name", ""),
+                "category": ch.get("category", ""),
+                "url":      hls,
+            })
+        channels.sort(key=lambda c: (c["category"], c["name"]))
+
+        with self._lock:
+            self._by_lang[lang] = channels
+            self._errors.pop(lang, None)
+        log.info(f"Pluto TV [{lang}]: loaded {len(channels)} channels")
+
+    def refresh_all(self):
+        for lang in PLUTO_LANGS:
+            self._fetch_lang(lang)
+
+    def start_background_refresh(self):
+        def _loop():
+            while True:
+                self.refresh_all()
+                time.sleep(PLUTO_REFRESH_SECS)
+        threading.Thread(target=_loop, daemon=True).start()
+
+
+pluto_cache = PlutoCache()
 
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
@@ -446,6 +522,7 @@ STATUS_HTML = """<!DOCTYPE html>
       <div class="env-item">Max streams <b>{{max_streams}}</b></div>
     <div class="env-item">Audio start delay <b>{{audio_delay_ms}} ms</b></div>
     <div class="env-item">Subscriptions <b>{{subs_status}}</b></div>
+    <div class="env-item">Pluto TV langs <b>{{pluto_langs}}</b></div>
   </div>
 </div>
 </div>
@@ -558,7 +635,8 @@ STATUS_HTML = """<!DOCTYPE html>
   </div>
   <div class="card">
     <h2>Channels</h2>
-    <div class="feed-status" id="pluto-status"></div>
+    <div id="pluto-lang-btns" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;"></div>
+    <div class="feed-status" id="pluto-status">Open this tab to load channels.</div>
     <div id="pluto-list"></div>
   </div>
 </div>
@@ -702,66 +780,110 @@ STATUS_HTML = """<!DOCTYPE html>
   });
 
   // ── Pluto TV tab ──
-  var plutoSync   = document.getElementById("pluto-sync");
-  var plutoFilter = document.getElementById("pluto-filter");
-  var plutoStatus = document.getElementById("pluto-status");
-  var plutoList   = document.getElementById("pluto-list");
-  plutoSync.value = "{{audio_delay_ms}}";
+  var plutoSync     = document.getElementById("pluto-sync");
+  var plutoFilter   = document.getElementById("pluto-filter");
+  var plutoStatus   = document.getElementById("pluto-status");
+  var plutoList     = document.getElementById("pluto-list");
+  var plutoLangBtns = document.getElementById("pluto-lang-btns");
+  plutoSync.value   = "{{audio_delay_ms}}";
 
-  // Public Pluto TV HLS streams (US, no account required)
-  var PLUTO_CHANNELS = [
-    {name:"CNN",             url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5e3c73cd2e5d2a0007c14f8d/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
-    {name:"Fox News",        url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5e3c73cd2e5d2a0007c14f90/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
-    {name:"MSNBC",           url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/636418f0d8e6060007750ef7/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
-    {name:"Bloomberg",       url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5cf29ac6197def0009486a49/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
-    {name:"Sky News",        url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5e3ce9e5e0878800079e1ac2/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
-    {name:"Action Movies",   url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f57b5b191be29e00e8718/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
-    {name:"Comedy Central",  url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f5a234a494a7d1ac51fee/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
-    {name:"Star Trek",       url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f5a9e4a494a7d1ac52155/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
-    {name:"Crime Drama",     url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f58eab1974eca3aeb93e5/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
-    {name:"Paranormal",      url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f58634a494a7d1ac51e86/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
-    {name:"Drama Movies",    url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f5a154a494a7d1ac51fe3/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
-    {name:"Horror",          url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f58d6b1974eca3aeb939f/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
-    {name:"Science Fiction", url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f59834a494a7d1ac51ef4/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
-    {name:"Anime",           url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f5a8a4a494a7d1ac52148/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
-    {name:"Classic TV",      url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f57b5b191be29e00e874e/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
-    {name:"Sports",          url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f5a364a494a7d1ac51ff9/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
-    {name:"Latino Mix",      url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5cb5bace98e48e0009ae7bb7/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
-    {name:"Music Videos",    url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f5a524a494a7d1ac52017/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
-    {name:"Documentary",     url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f59044a494a7d1ac51ec1/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
-    {name:"Nature",          url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f59fa4a494a7d1ac51f32/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
-  ];
-
-  var filteredPluto = PLUTO_CHANNELS.slice();
+  var plutoByLang   = {};   // { lang: [channels] }
+  var plutoActiveLang = null;
+  var plutoLangs    = "{{pluto_langs}}".split(",").map(function(s){ return s.trim(); });
 
   function renderPluto(channels) {
     plutoList.innerHTML = "";
+    var lastCat = null;
     channels.forEach(function (ch) {
+      if (ch.category && ch.category !== lastCat) {
+        lastCat = ch.category;
+        var hdr = document.createElement("div");
+        hdr.style.cssText = "font-family:'Orbitron',monospace;font-size:.7rem;" +
+          "letter-spacing:.12em;color:var(--muted);padding:12px 0 4px;" +
+          "text-transform:uppercase;border-top:1px solid var(--border);margin-top:4px;";
+        hdr.textContent = ch.category;
+        plutoList.appendChild(hdr);
+      }
       var row = document.createElement("div");
       row.className = "stream-row";
       row.style.cursor = "pointer";
       row.innerHTML =
         '<span style="font-size:.95rem;">' + escHtml(ch.name) + '</span>' +
-        '<span style="font-family:monospace;font-size:.75rem;color:var(--muted);">LIVE →</span>';
+        '<span style="font-family:monospace;font-size:.75rem;color:var(--muted);">LIVE \u2192</span>';
       row.addEventListener("click", function () {
         window.location.href = buildWatchUrl(ch.url, "", plutoSync.value);
       });
       plutoList.appendChild(row);
     });
-    plutoStatus.textContent = channels.length + " channels (US, no account required)";
   }
 
-  renderPluto(PLUTO_CHANNELS);
-
-  plutoFilter.addEventListener("input", function () {
+  function applyPlutoFilter() {
+    var all = plutoByLang[plutoActiveLang] || [];
     var q = (plutoFilter.value || "").toLowerCase().trim();
-    filteredPluto = q
-      ? PLUTO_CHANNELS.filter(function (c) {
-          return c.name.toLowerCase().indexOf(q) !== -1;
+    var filtered = q
+      ? all.filter(function (c) {
+          return c.name.toLowerCase().indexOf(q) !== -1 ||
+                 c.category.toLowerCase().indexOf(q) !== -1;
         })
-      : PLUTO_CHANNELS.slice();
-    renderPluto(filteredPluto);
+      : all;
+    renderPluto(filtered);
+    plutoStatus.textContent = filtered.length +
+      (q ? " of " + all.length : "") + " channels (no account required)";
+  }
+
+  function switchPlutoLang(lang) {
+    plutoActiveLang = lang;
+    // Update button styles
+    plutoLangBtns.querySelectorAll("button").forEach(function (b) {
+      b.style.background = b.getAttribute("data-lang") === lang
+        ? "var(--red)" : "transparent";
+      b.style.color = b.getAttribute("data-lang") === lang
+        ? "#fff" : "var(--muted)";
+    });
+    if (plutoByLang[lang]) {
+      applyPlutoFilter();
+      return;
+    }
+    plutoStatus.textContent = "Loading " + lang.toUpperCase() + " channels\u2026";
+    plutoList.innerHTML = "";
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/pluto_channels?lang=" + encodeURIComponent(lang), true);
+    xhr.timeout = 15000;
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) return;
+      var data;
+      try { data = JSON.parse(xhr.responseText); } catch (e) {
+        plutoStatus.textContent = "Failed to load channels."; return;
+      }
+      if (data.error) { plutoStatus.textContent = "Error: " + data.error; return; }
+      plutoByLang[lang] = data.channels || [];
+      if (plutoActiveLang === lang) applyPlutoFilter();
+    };
+    xhr.send();
+  }
+
+  // Build language toggle buttons
+  plutoLangs.forEach(function (lang) {
+    var btn = document.createElement("button");
+    btn.setAttribute("data-lang", lang);
+    btn.textContent = lang.toUpperCase();
+    btn.style.cssText = "font-family:'Orbitron',monospace;font-size:.7rem;" +
+      "letter-spacing:.1em;padding:6px 14px;border-radius:6px;" +
+      "border:1px solid var(--border);background:transparent;" +
+      "color:var(--muted);cursor:pointer;";
+    btn.addEventListener("click", function () { switchPlutoLang(lang); });
+    plutoLangBtns.appendChild(btn);
   });
+
+  // Load first language when Pluto tab is first opened
+  var plutoOpened = false;
+  document.querySelector('[data-tab="pluto"]').addEventListener("click", function () {
+    if (plutoOpened) return;
+    plutoOpened = true;
+    switchPlutoLang(plutoLangs[0]);
+  });
+
+  plutoFilter.addEventListener("input", applyPlutoFilter);
 
   // ── Feed tab ──
   var feedChannel  = document.getElementById("feed-channel");
@@ -1049,7 +1171,8 @@ def render_status_page() -> str:
             .replace("{{height}}", str(STREAM_HEIGHT))
             .replace("{{max_streams}}", str(MAX_STREAMS))
             .replace("{{audio_delay_ms}}", str(AUDIO_DELAY_MS))
-            .replace("{{subs_status}}", subs_status))
+            .replace("{{subs_status}}", subs_status)
+            .replace("{{pluto_langs}}", ", ".join(PLUTO_LANGS)))
 
 def render_watch_page(stream_id: str, sync_ms: int) -> str:
     return (WATCH_HTML
@@ -1125,6 +1248,10 @@ class Handler(BaseHTTPRequestHandler):
 
         elif path == "/subscriptions":
             self._serve_subscriptions()
+
+        elif path == "/pluto_channels":
+            lang = qs.get("lang", [PLUTO_LANGS[0]])[0]
+            self._serve_pluto_channels(lang)
 
         elif path == "/stream_status":
             sid = qs.get("sid", [None])[0]
@@ -1235,6 +1362,17 @@ class Handler(BaseHTTPRequestHandler):
             "channels":  data.get("channels", []),
         })
 
+    # ── Pluto TV channels ─────────────────────────────────────────────────────
+    def _serve_pluto_channels(self, lang: str):
+        channels, err = pluto_cache.get(lang)
+        if not channels:
+            if err:
+                self._error(502, f"Pluto TV [{lang}] unavailable: {err}")
+            else:
+                self._error(503, "Pluto TV channel list not loaded yet, try again shortly")
+            return
+        self._json({"lang": lang, "channels": channels})
+
     # ── Feed ──────────────────────────────────────────────────────────────────
     def _serve_feed(self, channel: str, limit: int):
         # Normalise: bare handle (@channel), channel URL, or plain name
@@ -1251,7 +1389,7 @@ class Handler(BaseHTTPRequestHandler):
                     "yt-dlp",
                     "--flat-playlist",
                     "--playlist-end", str(limit),
-                    "--print", "%(id)s\t%(title)s\t%(duration)s\t%(thumbnail)s",
+                    "--print", "%(id)s\t%(title)s\t%(duration)s\t%(thumbnail)s\t%(webpage_url)s",
                     "--no-warnings",
                     "--quiet",
                     url,
@@ -1272,21 +1410,28 @@ class Handler(BaseHTTPRequestHandler):
 
         videos = []
         for line in r.stdout.strip().splitlines():
-            parts = line.split("\t", 3)
+            parts = line.split("\t", 4)
             if len(parts) < 2:
                 continue
             vid_id   = parts[0].strip()
             title    = parts[1].strip()
             duration = parts[2].strip() if len(parts) > 2 else ""
             thumb    = parts[3].strip() if len(parts) > 3 else ""
+            webpage  = parts[4].strip() if len(parts) > 4 else ""
             if not vid_id or vid_id == "NA":
                 continue
+            # Use the canonical webpage URL when available; fall back to
+            # building a YouTube URL from the ID for backwards compatibility.
+            if webpage and webpage != "NA":
+                video_url = webpage
+            else:
+                video_url = f"https://www.youtube.com/watch?v={vid_id}"
             videos.append({
                 "id":       vid_id,
                 "title":    title,
                 "duration": duration,
                 "thumb":    thumb,
-                "url":      f"https://www.youtube.com/watch?v={vid_id}",
+                "url":      video_url,
             })
 
         self._json({"channel": url, "videos": videos})
@@ -1448,6 +1593,8 @@ def main():
     log.info(f"  FPS={MJPEG_FPS}  Quality={FFMPEG_QUALITY}  "
              f"Res={STREAM_WIDTH}×{STREAM_HEIGHT}  MaxStreams={MAX_STREAMS}")
     log.info("═" * 52)
+
+    pluto_cache.start_background_refresh()
 
     server = ThreadedHTTPServer((HOST, PORT), Handler)
 

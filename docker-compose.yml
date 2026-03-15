@@ -19,6 +19,7 @@ services:
       STREAM_WIDTH:  1920
       STREAM_HEIGHT: 1080
       MAX_STREAMS:   3    # max parallel videos
+      PLUTO_LANGS:   es,en  # comma-separated Pluto TV regions: es, en, de, fr, it, …
       # SUBSCRIPTIONS_FILE: /subscriptions.json  # path inside container (default)
     # Generate subscriptions.json at home with:
     #   uv run sync_subscriptions.py --cookies cookies.txt
