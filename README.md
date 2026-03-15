@@ -74,51 +74,62 @@ Enter `@channelhandle` or a full channel URL in the feed tab and click **Load Fe
 
 ### Syncing your YouTube subscriptions
 
-Run `sync_subscriptions.py` once on your home machine to generate a
-`subscriptions.json` file. The streamer mounts this file — no cookies or
-network calls needed in the container.
+Run `sync_subscriptions.py` **once on your home machine** to generate a
+`subscriptions.json` file. The streamer reads this static file — no cookies
+or YouTube access needed inside the container.
 
-**Option A — read directly from your browser (easiest, no manual export):**
+#### Step 1 — generate subscriptions.json
+
+Make sure you are logged in to YouTube in your browser, then run:
 
 ```bash
-# Chrome / Chromium / Brave / Edge / Firefox / Opera / Safari
+# Chrome
 uv run sync_subscriptions.py --browser chrome
+
+# Firefox
 uv run sync_subscriptions.py --browser firefox
+
+# Other supported browsers: chromium, brave, edge, opera, safari
+uv run sync_subscriptions.py --browser brave
 ```
 
-Make sure you are logged in to YouTube in that browser before running.
-yt-dlp reads the browser's cookie store directly.
+yt-dlp reads your browser's cookie store directly — no export or extension
+needed. The script fetches only the channel list (not videos) and finishes
+in a few seconds. You will see output like:
 
-**Option B — export cookies.txt manually:**
-
-1. Install the [Get cookies.txt LOCALLY](https://chrome.google.com/webstore/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)
-   Chrome extension (or equivalent for Firefox).
-2. Go to `youtube.com` while logged in → click the extension → Export.
-3. Save the file as `cookies.txt` in the project folder.
-
-```bash
-uv run sync_subscriptions.py --cookies cookies.txt
+```
+Fetching subscriptions from YouTube…
+✔ 112 channels written to subscriptions.json
 ```
 
-Both options write `subscriptions.json` in the current directory.
-Re-run whenever you follow or unfollow channels.
+Re-run this command whenever you follow or unfollow channels.
 
-**Mount it in the container** (already configured in `docker-compose.yml`):
+#### Step 2 — mount it in the container
+
+`docker-compose.yml` already has the volume configured:
 
 ```yaml
 volumes:
   - ./subscriptions.json:/subscriptions.json:ro
 ```
 
-Then restart the container:
+After generating the file, restart the container to pick it up:
 
 ```bash
 docker compose restart streamer
 ```
 
-The **My Subscriptions** panel appears automatically in the Channel Feed tab
-once the file is mounted. It shows all your followed channels sorted
-alphabetically with a filter box. Clicking any channel loads its recent videos.
+#### Step 3 — use it in the UI
+
+Open the **Channel Feed** tab. A **My Subscriptions** panel will appear
+automatically. Click **Load Subscriptions**, then click any channel to browse
+its recent uploads and stream a video.
+
+> **Note:** if you prefer to export cookies manually instead of using
+> `--browser`, install the
+> [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)
+> Chrome extension, export while on youtube.com, then run:
+> `uv run sync_subscriptions.py --cookies /path/to/cookies.txt`
 
 ---
 
