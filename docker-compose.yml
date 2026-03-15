@@ -10,10 +10,15 @@ services:
     pull_policy: never
     container_name: opencarstream
     restart: unless-stopped
-    ports:
-      - "33333:8080"
+    # network_mode: host is required for multicast RTP streams (rtp://@239.x.x.x).
+    # With host networking the ports directive below is ignored; the app is
+    # accessible directly on PORT (default 33333) of the host.
+    # Remove or comment out network_mode if you don't need multicast support.
+    network_mode: host
+    # ports:
+    #   - "33333:33333"   # used when network_mode is not host
     environment:
-      PORT:          8080
+      PORT:          33333
       MJPEG_FPS:     24
       FFMPEG_QUALITY: 15   # 1=best quality, 31=smallest file
       STREAM_WIDTH:  1920
@@ -37,7 +42,7 @@ services:
       - ./config:/config
 
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-sf", "http://localhost:33333/health"]
       interval: 30s
       timeout:  5s
       retries:  3
