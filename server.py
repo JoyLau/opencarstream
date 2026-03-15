@@ -271,6 +271,8 @@ pluto_cache = PlutoCache()
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
 def fetch_title(stream: Stream):
+    if _is_direct_stream(stream.url):
+        return  # no yt-dlp for direct streams; title stays empty
     try:
         r = subprocess.run(
             ["yt-dlp", "--no-playlist", "--print", "title", stream.url],
@@ -290,13 +292,43 @@ def _is_direct_hls(url: str) -> bool:
     return path.endswith(".m3u8") or path.endswith(".m3u")
 
 
+def _is_acestream(url: str) -> bool:
+    """True for acestream-http-proxy URLs (MPEG-TS over HTTP)."""
+    return "/ace/getstream" in url or "/ace/manifest.m3u8" in url
+
+
+def _is_direct_stream(url: str) -> bool:
+    """True for any URL ffmpeg can consume directly without yt-dlp."""
+    return _is_direct_hls(url) or _is_acestream(url)
+
+
+_BROWSER_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+
+
 def _run_hls_pipeline(stream: Stream):
-    """Pipeline for direct HLS streams (e.g. Pluto TV) — no yt-dlp needed."""
-    log.info(f"[{stream.id}] HLS direct pipeline")
+    """Pipeline for direct streams (HLS / MPEG-TS / Acestream) — no yt-dlp."""
+    is_ace = _is_acestream(stream.url)
+    log.info(f"[{stream.id}] Direct pipeline (ace={is_ace})")
+
+    input_args: list[str] = []
+    if is_ace:
+        # Acestream-http-proxy serves MPEG-TS; follow redirects, no UA needed
+        input_args = ["-timeout", "10000000"]
+    else:
+        input_args = [
+            "-user_agent", _BROWSER_UA,
+            "-headers", "Referer: https://pluto.tv/\r\n",
+            "-re",
+        ]
+
     ff_cmd = [
         "ffmpeg",
         "-loglevel", "error",
-        "-re",
+        *input_args,
         "-i", stream.url,
         "-vf", (
             f"scale={STREAM_WIDTH}:{STREAM_HEIGHT}"
@@ -371,7 +403,7 @@ def run_pipeline(stream: Stream):
     log.info(f"[{stream.id}] Starting pipeline for: {stream.url[:80]}")
     threading.Thread(target=fetch_title, args=(stream,), daemon=True).start()
 
-    if _is_direct_hls(stream.url):
+    if _is_direct_stream(stream.url):
         _run_hls_pipeline(stream)
         return
 
@@ -607,6 +639,7 @@ STATUS_HTML = """<!DOCTYPE html>
   <button class="tab-btn" data-tab="feed">YouTube</button>
   <button class="tab-btn" data-tab="twitch">Twitch</button>
   <button class="tab-btn" data-tab="pluto">Pluto TV</button>
+  <button class="tab-btn" data-tab="ace">Acestream</button>
   <button class="tab-btn" data-tab="info">Info</button>
 </div>
 
@@ -774,6 +807,57 @@ STATUS_HTML = """<!DOCTYPE html>
     <div id="pluto-lang-btns" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;"></div>
     <div class="feed-status" id="pluto-status">Open this tab to load channels.</div>
     <div id="pluto-list"></div>
+  </div>
+</div>
+
+<!-- ── Acestream tab ── -->
+<div class="tab-panel" id="tab-ace">
+  <div class="card">
+    <h2>Playback options</h2>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+      <select id="ace-quality">
+        <option value="">Auto quality</option>
+        <option value="1080">1080p</option>
+        <option value="720">720p</option>
+        <option value="480">480p</option>
+        <option value="360">360p</option>
+      </select>
+      <select id="ace-sync">
+        <option value="0" selected>Delay: 0 s</option>
+        <option value="500">Delay: 0.5 s</option>
+        <option value="1000">Delay: 1 s</option>
+        <option value="1500">Delay: 1.5 s</option>
+        <option value="2000">Delay: 2 s</option>
+      </select>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Stream by content ID</h2>
+    <p style="font-size:.85rem;color:var(--muted);margin-bottom:12px;">
+      Enter an Acestream content ID (40-char hex) or a full
+      <code style="color:var(--text);">acestream://</code> link.
+      Your acestream-http-proxy must be running.
+    </p>
+    <div class="feed-controls">
+      <input id="ace-id" type="text" placeholder="acestream://b08e… or content ID">
+      <input id="ace-host" type="text" placeholder="Proxy host:port"
+             style="max-width:200px;">
+      <button id="ace-go">OPEN STREAM</button>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Saved streams</h2>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
+      <input id="ace-save-name" type="text" placeholder="Name"
+             style="flex:1;min-width:140px;background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:monospace;">
+      <input id="ace-save-id" type="text" placeholder="Content ID or acestream:// link"
+             style="flex:2;min-width:220px;background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:monospace;">
+      <button id="ace-save-btn"
+              style="background:var(--red);color:white;border:0;border-radius:6px;padding:8px 14px;font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:.08em;cursor:pointer;">
+        SAVE
+      </button>
+    </div>
+    <div id="ace-saved-list"></div>
   </div>
 </div>
 
@@ -1182,6 +1266,118 @@ STATUS_HTML = """<!DOCTYPE html>
   feedChannel.addEventListener("keydown", function (e) {
     if ((e.key || "") === "Enter" || e.keyCode === 13) loadFeed();
   });
+
+  // ── Acestream tab ──
+  var aceQuality  = document.getElementById("ace-quality");
+  var aceSync     = document.getElementById("ace-sync");
+  var aceIdInput  = document.getElementById("ace-id");
+  var aceHost     = document.getElementById("ace-host");
+  var aceGo       = document.getElementById("ace-go");
+  var aceSaveName = document.getElementById("ace-save-name");
+  var aceSaveId   = document.getElementById("ace-save-id");
+  var aceSaveBtn  = document.getElementById("ace-save-btn");
+  var aceSavedList= document.getElementById("ace-saved-list");
+  aceSync.value   = "{{audio_delay_ms}}";
+
+  // Persist proxy host and saved streams in localStorage
+  var ACE_HOST_KEY    = "ace_proxy_host";
+  var ACE_STREAMS_KEY = "ace_saved_streams";
+
+  aceHost.value = localStorage.getItem(ACE_HOST_KEY) || "192.168.1.7:6878";
+  aceHost.addEventListener("change", function () {
+    localStorage.setItem(ACE_HOST_KEY, aceHost.value.trim());
+  });
+
+  function aceContentId(raw) {
+    raw = (raw || "").trim();
+    // acestream://HASH → extract hash
+    if (/^acestream:\/\//i.test(raw)) raw = raw.slice(12);
+    // Full URL → extract id param
+    if (/^https?:\/\//i.test(raw)) {
+      var m = raw.match(/[?&]id=([a-f0-9]{40})/i);
+      if (m) return m[1];
+    }
+    return raw;
+  }
+
+  function buildAceUrl(raw) {
+    var cid = aceContentId(raw);
+    if (!cid) return null;
+    var host = (aceHost.value || "").trim() || "192.168.1.7:6878";
+    return "http://" + host + "/ace/getstream?id=" + cid;
+  }
+
+  function openAceStream() {
+    var raw = (aceIdInput.value || "").trim();
+    if (!raw) { aceIdInput.focus(); return; }
+    var url = buildAceUrl(raw);
+    if (!url) { aceIdInput.focus(); return; }
+    localStorage.setItem(ACE_HOST_KEY, (aceHost.value || "").trim());
+    window.location.href = buildWatchUrl(url, aceQuality.value, aceSync.value);
+  }
+
+  aceGo.addEventListener("click", openAceStream);
+  aceIdInput.addEventListener("keydown", function (e) {
+    if ((e.key || "") === "Enter" || e.keyCode === 13) openAceStream();
+  });
+
+  // Saved streams
+  function loadSaved() {
+    try { return JSON.parse(localStorage.getItem(ACE_STREAMS_KEY) || "[]"); }
+    catch (e) { return []; }
+  }
+
+  function saveSaved(list) {
+    localStorage.setItem(ACE_STREAMS_KEY, JSON.stringify(list));
+  }
+
+  function renderSaved() {
+    var list = loadSaved();
+    aceSavedList.innerHTML = "";
+    if (!list.length) {
+      aceSavedList.innerHTML = '<p class="empty">No saved streams yet.</p>';
+      return;
+    }
+    list.forEach(function (item, idx) {
+      var row = document.createElement("div");
+      row.className = "stream-row";
+      row.innerHTML =
+        '<span style="cursor:pointer;flex:1;" data-idx="' + idx + '">' +
+        escHtml(item.name) + '</span>' +
+        '<span style="font-family:monospace;font-size:.75rem;color:var(--muted);margin-right:12px;">' +
+        escHtml(item.id.slice(0, 12)) + '…</span>' +
+        '<button data-del="' + idx + '" style="background:transparent;border:1px solid var(--border);' +
+        'color:var(--muted);border-radius:4px;padding:2px 8px;cursor:pointer;font-size:.75rem;">✕</button>';
+      row.querySelector("[data-idx]").addEventListener("click", function () {
+        var url = buildAceUrl(item.id);
+        if (url) window.location.href = buildWatchUrl(url, aceQuality.value, aceSync.value);
+      });
+      row.querySelector("[data-del]").addEventListener("click", function (e) {
+        e.stopPropagation();
+        var saved = loadSaved();
+        saved.splice(idx, 1);
+        saveSaved(saved);
+        renderSaved();
+      });
+      aceSavedList.appendChild(row);
+    });
+  }
+
+  aceSaveBtn.addEventListener("click", function () {
+    var name = (aceSaveName.value || "").trim();
+    var raw  = (aceSaveId.value  || "").trim();
+    if (!name || !raw) return;
+    var cid = aceContentId(raw);
+    if (!cid) return;
+    var saved = loadSaved();
+    saved.push({name: name, id: cid});
+    saveSaved(saved);
+    aceSaveName.value = "";
+    aceSaveId.value   = "";
+    renderSaved();
+  });
+
+  renderSaved();
 })();
 </script>
 </body></html>"""
@@ -1639,11 +1835,20 @@ class Handler(BaseHTTPRequestHandler):
     @staticmethod
     def _launch_audio_pipeline(url: str, seek_s: float):
         """Spawn yt-dlp | ffmpeg for audio starting at seek_s seconds."""
-        if _is_direct_hls(url):
-            # HLS stream: feed URL directly to ffmpeg, no yt-dlp needed
+        if _is_direct_stream(url):
+            # HLS / MPEG-TS / Acestream: feed URL directly to ffmpeg
+            input_args: list[str] = []
+            if _is_acestream(url):
+                input_args = ["-timeout", "10000000"]
+            else:
+                input_args = [
+                    "-user_agent", _BROWSER_UA,
+                    "-headers", "Referer: https://pluto.tv/\r\n",
+                ]
             ff_cmd = [
                 "ffmpeg",
                 "-loglevel", "error",
+                *input_args,
                 "-i", url,
                 "-vn",
                 "-af", "aresample=async=1:first_pts=0",
