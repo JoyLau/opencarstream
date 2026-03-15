@@ -977,7 +977,8 @@ STATUS_HTML = """<!DOCTYPE html>
 <title>OpenCarStream — Streaming for Tesla vehicles</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=Rajdhani:wght@300;500&display=swap');
-  :root{--red:#e31937;--dark:#090909;--panel:#111117;--border:#252530;--text:#e0e0ee;--muted:#555568;}
+  :root{--red:#e31937;--dark:#090909;--panel:#111117;--border:#252530;--text:#e0e0ee;--muted:#555568;--input-bg:#0d0d14;--thumb-bg:#1a1a24;}
+  @media(prefers-color-scheme:light){:root{--dark:#f4f4f6;--panel:#ffffff;--border:#d8d8e0;--text:#1a1a2e;--muted:#888899;--input-bg:#eaeaf0;--thumb-bg:#dcdce8;}}
   *{margin:0;padding:0;box-sizing:border-box;}
   body{background:var(--dark);color:var(--text);font-family:'Rajdhani',sans-serif;font-size:17px;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:40px 20px;}
   h1{font-family:'Orbitron',monospace;font-weight:900;font-size:2rem;color:var(--red);letter-spacing:.12em;text-shadow:0 0 24px rgba(227,25,55,.45);margin-bottom:6px;}
@@ -989,15 +990,15 @@ STATUS_HTML = """<!DOCTYPE html>
   .tab-panel.active{display:block;}
   .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;width:100%;padding:28px 32px;margin-bottom:20px;}
   .card h2{font-family:'Orbitron',monospace;font-size:.85rem;letter-spacing:.15em;color:var(--muted);margin-bottom:18px;text-transform:uppercase;}
-  .usage{font-family:monospace;font-size:.95rem;background:#0d0d14;border:1px solid var(--border);border-radius:6px;padding:14px 18px;line-height:1.9;word-break:break-all;}
+  .usage{font-family:monospace;font-size:.95rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;padding:14px 18px;line-height:1.9;word-break:break-all;}
   .usage span{color:var(--red);}
   .stream-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);}
   .stream-row:last-child{border-bottom:none;}
   .badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:.75rem;letter-spacing:.06em;font-family:'Orbitron',monospace;}
-  .badge.streaming{background:rgba(0,200,100,.15);color:#00c864;border:1px solid rgba(0,200,100,.3);}
-  .badge.starting{background:rgba(255,152,0,.12);color:#ff9800;border:1px solid rgba(255,152,0,.3);}
+  .badge.streaming{background:rgba(0,200,100,.15);color:#00a852;border:1px solid rgba(0,200,100,.3);}
+  .badge.starting{background:rgba(255,152,0,.12);color:#c97800;border:1px solid rgba(255,152,0,.3);}
   .badge.error{background:rgba(227,25,55,.12);color:var(--red);border:1px solid rgba(227,25,55,.3);}
-  .badge.done{background:rgba(255,255,255,.05);color:var(--muted);border:1px solid var(--border);}
+  .badge.done{background:var(--input-bg);color:var(--muted);border:1px solid var(--border);}
   .empty{color:var(--muted);font-size:.9rem;font-style:italic;}
   a{color:var(--red);text-decoration:none;}a:hover{text-decoration:underline;}
   .env-row{display:flex;gap:24px;flex-wrap:wrap;margin-top:4px;}
@@ -1005,19 +1006,19 @@ STATUS_HTML = """<!DOCTYPE html>
   .env-item b{color:var(--text);}
   /* Feed tab */
   .feed-controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:18px;}
-  .feed-controls input{flex:1;min-width:220px;background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-family:monospace;font-size:.95rem;}
+  .feed-controls input{flex:1;min-width:220px;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-family:monospace;font-size:.95rem;}
   .feed-controls button{background:var(--red);color:white;border:0;border-radius:6px;padding:10px 16px;font-family:'Orbitron',monospace;letter-spacing:.08em;cursor:pointer;white-space:nowrap;}
   .feed-status{color:var(--muted);font-size:.9rem;font-style:italic;margin-bottom:10px;min-height:1.4em;}
   .feed-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px;}
-  .feed-card{background:#0d0d14;border:1px solid var(--border);border-radius:8px;overflow:hidden;cursor:pointer;transition:border-color .15s;}
+  .feed-card{background:var(--input-bg);border:1px solid var(--border);border-radius:8px;overflow:hidden;cursor:pointer;transition:border-color .15s;}
   .feed-card:hover{border-color:var(--red);}
-  .feed-thumb{width:100%;aspect-ratio:16/9;object-fit:cover;background:#1a1a24;display:block;}
+  .feed-thumb{width:100%;aspect-ratio:16/9;object-fit:cover;background:var(--thumb-bg);display:block;}
   .feed-info{padding:8px 10px;}
   .feed-title{font-size:.85rem;line-height:1.3;color:var(--text);margin-bottom:4px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
   .feed-dur{font-family:monospace;font-size:.75rem;color:var(--muted);}
   /* shared input style for start-stream row */
-  #yt-id{flex:1;min-width:280px;background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-family:monospace;}
-  select{background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-family:monospace;}
+  #yt-id{flex:1;min-width:280px;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-family:monospace;}
+  select{background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-family:monospace;}
   footer{margin-top:26px;color:var(--muted);font-size:.78rem;letter-spacing:.04em;text-align:center;max-width:760px;line-height:1.5;}
 </style>
 </head>
@@ -1092,7 +1093,7 @@ STATUS_HTML = """<!DOCTYPE html>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
       <button id="subs-load" style="background:var(--red);color:white;border:0;border-radius:6px;padding:8px 16px;font-family:'Orbitron',monospace;letter-spacing:.08em;cursor:pointer;">LOAD SUBSCRIPTIONS</button>
       <input id="subs-filter" type="text" placeholder="Filter channels…"
-             style="flex:1;min-width:180px;background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:monospace;display:none;">
+             style="flex:1;min-width:180px;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:monospace;display:none;">
     </div>
     <div class="feed-status" id="subs-status"></div>
     <div id="subs-list" style="display:flex;flex-direction:column;gap:0;"></div>
@@ -1150,7 +1151,7 @@ STATUS_HTML = """<!DOCTYPE html>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
       <div id="pluto-sync-btns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
       <input id="pluto-filter" type="text" placeholder="Filter channels…"
-             style="flex:1;min-width:180px;background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:monospace;">
+             style="flex:1;min-width:180px;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:monospace;">
     </div>
   </div>
   <div class="card">
@@ -1178,7 +1179,7 @@ STATUS_HTML = """<!DOCTYPE html>
         ◄
       </button>
       <div id="iptv-list-name"
-           style="flex:1;min-width:180px;color:var(--text);font-size:.85rem;text-align:center;padding:8px;border:1px solid var(--border);border-radius:6px;background:#0d0d14;">
+           style="flex:1;min-width:180px;color:var(--text);font-size:.85rem;text-align:center;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);">
         Select a list
       </div>
       <button id="iptv-next"
@@ -1191,7 +1192,7 @@ STATUS_HTML = """<!DOCTYPE html>
       </button>
     </div>
     <input id="iptv-filter" type="text" placeholder="Filter streams..."
-           style="width:100%;background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:monospace;margin-bottom:12px;">
+           style="width:100%;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:monospace;margin-bottom:12px;">
     <div class="feed-status" id="iptv-status">Open this tab to load IPTV lists.</div>
     <div id="iptv-streams"></div>
   </div>
@@ -1224,9 +1225,9 @@ STATUS_HTML = """<!DOCTYPE html>
     <h2>Saved streams</h2>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
       <input id="ace-save-name" type="text" placeholder="Name"
-             style="flex:1;min-width:140px;background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:monospace;">
+             style="flex:1;min-width:140px;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:monospace;">
       <input id="ace-save-id" type="text" placeholder="Content ID or acestream:// link"
-             style="flex:2;min-width:220px;background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:monospace;">
+             style="flex:2;min-width:220px;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:monospace;">
       <button id="ace-save-btn"
               style="background:var(--red);color:white;border:0;border-radius:6px;padding:8px 14px;font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:.08em;cursor:pointer;">
         SAVE
@@ -2212,6 +2213,7 @@ WATCH_HTML = """<!DOCTYPE html>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=Rajdhani:wght@300;500&display=swap');
   :root{--red:#e31937;--dark:#090909;--panel:#111117;--border:#252530;--text:#e0e0ee;}
+  @media(prefers-color-scheme:light){:root{--dark:#f4f4f6;--panel:#ffffff;--border:#d8d8e0;--text:#1a1a2e;}}
   *{margin:0;padding:0;box-sizing:border-box;}
   body{background:var(--dark);color:var(--text);font-family:'Rajdhani',sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:16px;}
   .top{width:100%;max-width:1280px;display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:12px;flex-wrap:wrap;}
