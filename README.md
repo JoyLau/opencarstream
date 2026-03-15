@@ -2,7 +2,7 @@
 
 Stream any video to your Tesla browser via MJPEG.  
 No `<video>` element inside.
-Supports YouTube, Twitch, X/Twitter, Pluto TV, and more.
+Supports YouTube, Twitch, X/Twitter, Pluto TV, IPTV lists, and more.
 
 ---
 
@@ -200,6 +200,7 @@ sudo cp /etc/letsencrypt/live/stream.yourdomain.com/privkey.pem   certs/key.pem
 | `MAX_STREAMS`         | 3                     | Max parallel video streams              |
 | `AUDIO_DELAY_MS`      | 0                     | ms to delay video start after audio     |
 | `LOCAL_MEDIA_DIR`     | /media/videos         | Local Media folder path inside container |
+| `IPTV_LISTS_DIR`      | /iptv_lists           | IPTV list folder (`.m3u`/`.m3u8`) inside container |
 | `SUBSCRIPTIONS_FILE`  | /subscriptions.json   | Path to subscriptions JSON inside container |
 
 Override in `docker-compose.yml` under `environment:`.
@@ -259,6 +260,35 @@ Notes:
 
 ---
 
+## IPTV lists in Docker
+
+The **IPTV** tab loads playlist files from a folder mounted in the container.
+
+```yaml
+environment:
+  IPTV_LISTS_DIR: /iptv_lists
+volumes:
+  - ./iptv_lists:/iptv_lists:ro
+```
+
+Put your playlist files in `./iptv_lists` next to `docker-compose.yml`, for example:
+
+```text
+./iptv_lists/sports.m3u
+./iptv_lists/news.m3u8
+```
+
+Then run:
+
+```bash
+docker compose up -d
+```
+
+Open the **IPTV** tab, pick a list by name, and all streams from that playlist
+will appear automatically.
+
+---
+
 ## Supported sources
 
 Any URL that yt-dlp supports works in the Stream tab or `/watch?url=`:
@@ -270,6 +300,7 @@ Any URL that yt-dlp supports works in the Stream tab or `/watch?url=`:
 | Twitch VOD    | `https://www.twitch.tv/videos/VOD_ID` |
 | X / Twitter   | `https://x.com/user/status/TWEET_ID` |
 | Pluto TV      | Built-in channel list in the Pluto TV tab (US, no account) |
+| IPTV list     | `.m3u` / `.m3u8` files in the IPTV tab (`iptv_lists/`) |
 
 For Twitch and YouTube VODs, use the **Twitch** and **YouTube** tabs respectively
 to browse and pick a stream. For X/Twitter, paste the tweet URL directly in the
@@ -281,9 +312,11 @@ Stream tab.
 
 | Endpoint                        | Description                                      |
 |---------------------------------|--------------------------------------------------|
-| `GET /`                         | Status dashboard (Stream / YouTube / Twitch / Pluto TV / Info tabs) |
+| `GET /`                         | Status dashboard (Stream / YouTube / Twitch / Pluto TV / IPTV / Info tabs) |
 | `GET /watch?url=…`              | Watch page (MJPEG video + audio)                 |
 | `GET /feed?channel=URL&limit=N` | JSON list of recent uploads for a channel/user   |
+| `GET /iptv_lists`               | JSON playlist files discovered in IPTV_LISTS_DIR |
+| `GET /iptv_streams?list=NAME`   | JSON stream entries parsed from a playlist       |
 | `GET /subscriptions`            | JSON channel list from subscriptions.json        |
 | `GET /health`                   | `{"ok":true}` — for uptime monitors              |
 | `GET /status`                   | JSON list of active streams                      |

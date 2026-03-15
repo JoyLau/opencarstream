@@ -70,9 +70,11 @@ PLUTO_REGION_MAP    = _parse_lang_map(os.environ.get("PLUTO_REGION_MAP", "es:ES,
 # This helps force region-specific lineups when server IP geo differs.
 PLUTO_XFF_MAP       = _parse_lang_map(os.environ.get("PLUTO_XFF_MAP", "en:8.8.8.8"))
 LOCAL_MEDIA_DIR     = os.environ.get("LOCAL_MEDIA_DIR", "/media/videos")
+IPTV_LISTS_DIR      = os.environ.get("IPTV_LISTS_DIR", "/iptv_lists")
 LOCAL_MEDIA_EXTS    = {
     ".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v", ".mpg", ".mpeg", ".ts",
 }
+IPTV_LIST_EXTS      = {".m3u", ".m3u8"}
 
 
 # ── Per-stream state ──────────────────────────────────────────────────────────
@@ -458,6 +460,75 @@ def _has_supported_media_ext(path: str) -> bool:
         target_ext = os.path.splitext(os.path.realpath(path))[1].lower()
         return target_ext in LOCAL_MEDIA_EXTS
     return False
+
+
+def _has_supported_iptv_list_ext(path: str) -> bool:
+    ext = os.path.splitext(path)[1].lower()
+    return ext in IPTV_LIST_EXTS
+
+
+def _parse_extinf_name(line: str) -> str:
+    # #EXTINF:-1 ... ,Channel Name
+    # Prefer the explicit title after the first comma.
+    _, _, tail = line.partition(",")
+    title = (tail or "").strip()
+    if title:
+        return title
+
+    # Fallback to tvg-name metadata if present.
+    marker = 'tvg-name="'
+    pos = line.find(marker)
+    if pos != -1:
+        rest = line[pos + len(marker):]
+        value, _, _ = rest.partition('"')
+        return value.strip()
+    return ""
+
+
+def _parse_iptv_m3u(content: str) -> list[dict[str, str]]:
+    streams: list[dict[str, str]] = []
+    pending_name = ""
+
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("#EXTINF"):
+            pending_name = _parse_extinf_name(line)
+            continue
+        if line.startswith("#"):
+            continue
+
+        url = line
+        name = pending_name or f"Stream {len(streams) + 1}"
+        streams.append({"name": name, "url": url})
+        pending_name = ""
+
+    return streams
+
+
+def _scan_iptv_lists() -> tuple[str, list[dict[str, str]], str]:
+    base = os.path.abspath(IPTV_LISTS_DIR)
+    if not os.path.isdir(base):
+        return base, [], f"IPTV lists directory not found: {base}"
+
+    lists: list[dict[str, str]] = []
+    try:
+        for root, _, names in os.walk(base, followlinks=True):
+            for filename in names:
+                full = os.path.join(root, filename)
+                if not os.path.isfile(full):
+                    continue
+                if not _has_supported_iptv_list_ext(full):
+                    continue
+                rel = os.path.relpath(full, base).replace(os.sep, "/")
+                name = os.path.splitext(os.path.basename(rel))[0]
+                lists.append({"id": rel, "name": name, "path": rel})
+    except Exception as e:
+        return base, [], f"Failed to scan IPTV lists folder: {e}"
+
+    lists.sort(key=lambda x: x["path"].lower())
+    return base, lists, ""
 
 
 _BROWSER_UA = (
@@ -959,6 +1030,7 @@ STATUS_HTML = """<!DOCTYPE html>
   <button class="tab-btn" data-tab="feed">YouTube</button>
   <button class="tab-btn" data-tab="twitch">Twitch</button>
   <button class="tab-btn" data-tab="pluto">Pluto TV</button>
+  <button class="tab-btn" data-tab="iptv">IPTV</button>
   <button class="tab-btn" data-tab="ace">Acestream</button>
   <button class="tab-btn" data-tab="local">Local Media</button>
   <button class="tab-btn" data-tab="info">Info</button>
@@ -1013,6 +1085,7 @@ STATUS_HTML = """<!DOCTYPE html>
     <div class="env-item">Audio start delay <b>{{audio_delay_ms}} ms</b></div>
     <div class="env-item">Subscriptions <b>{{subs_status}}</b></div>
     <div class="env-item">Pluto TV langs <b>{{pluto_langs}}</b></div>
+    <div class="env-item">IPTV lists <b>{{iptv_status}}</b></div>
   </div>
 </div>
 </div>
@@ -1131,6 +1204,48 @@ STATUS_HTML = """<!DOCTYPE html>
   </div>
 </div>
 
+<!-- ── IPTV tab ── -->
+<div class="tab-panel" id="tab-iptv">
+  <div class="card">
+    <h2>Playback options</h2>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+      <select id="iptv-quality">
+        <option value="">Auto quality</option>
+        <option value="1080">1080p</option>
+        <option value="720">720p</option>
+        <option value="480">480p</option>
+        <option value="360">360p</option>
+        <option value="240">240p</option>
+      </select>
+      <select id="iptv-sync">
+        <option value="0" selected>Delay: 0 s</option>
+        <option value="500">Delay: 0.5 s</option>
+        <option value="1000">Delay: 1 s</option>
+        <option value="1500">Delay: 1.5 s</option>
+        <option value="2000">Delay: 2 s</option>
+      </select>
+    </div>
+  </div>
+  <div class="card">
+    <h2>IPTV lists</h2>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
+      <select id="iptv-list-select" style="flex:1;min-width:180px;"></select>
+      <button id="iptv-load"
+              style="background:var(--red);color:white;border:0;border-radius:6px;padding:8px 14px;font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:.08em;cursor:pointer;">
+        LOAD LIST
+      </button>
+      <button id="iptv-refresh"
+              style="background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:8px 14px;font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:.08em;cursor:pointer;">
+        REFRESH LISTS
+      </button>
+    </div>
+    <input id="iptv-filter" type="text" placeholder="Filter streams..."
+           style="width:100%;background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:monospace;margin-bottom:12px;">
+    <div class="feed-status" id="iptv-status">Open this tab to load IPTV lists.</div>
+    <div id="iptv-streams"></div>
+  </div>
+</div>
+
 <!-- ── Acestream tab ── -->
 <div class="tab-panel" id="tab-ace">
   <div class="card">
@@ -1227,6 +1342,8 @@ STATUS_HTML = """<!DOCTYPE html>
       GET /feed<span>?channel=</span>@handle<span>&amp;limit=12</span>  → JSON video list<br>
       GET /local_media  → JSON local video list<br>
       GET /local_watch<span>?file=</span>relative/path.mp4<span>&amp;sync=1000</span><br>
+      GET /iptv_lists  → JSON IPTV playlists from mounted folder<br>
+      GET /iptv_streams<span>?list=</span>my-list<br>
       GET /subscriptions  → JSON channel list<br>
       GET /health   → JSON health check<br>
       GET /status   → JSON active streams
@@ -1497,6 +1614,147 @@ STATUS_HTML = """<!DOCTYPE html>
   });
 
   plutoFilter.addEventListener("input", applyPlutoFilter);
+
+  // ── IPTV tab ──
+  var iptvQuality   = document.getElementById("iptv-quality");
+  var iptvSync      = document.getElementById("iptv-sync");
+  var iptvListSel   = document.getElementById("iptv-list-select");
+  var iptvLoadBtn   = document.getElementById("iptv-load");
+  var iptvRefreshBtn= document.getElementById("iptv-refresh");
+  var iptvFilter    = document.getElementById("iptv-filter");
+  var iptvStatus    = document.getElementById("iptv-status");
+  var iptvStreamsEl = document.getElementById("iptv-streams");
+  iptvSync.value    = "{{audio_delay_ms}}";
+
+  var iptvLists = [];
+  var iptvStreams = [];
+
+  function selectedIptvListId() {
+    return (iptvListSel.value || "").trim();
+  }
+
+  function renderIptvLists() {
+    iptvListSel.innerHTML = "";
+    if (!iptvLists.length) {
+      var emptyOpt = document.createElement("option");
+      emptyOpt.value = "";
+      emptyOpt.textContent = "No .m3u lists found";
+      iptvListSel.appendChild(emptyOpt);
+      iptvListSel.disabled = true;
+      return;
+    }
+    iptvListSel.disabled = false;
+    iptvLists.forEach(function (item) {
+      var opt = document.createElement("option");
+      opt.value = item.id;
+      opt.textContent = item.name + " (" + item.path + ")";
+      iptvListSel.appendChild(opt);
+    });
+  }
+
+  function renderIptvStreams(list) {
+    var q = (iptvFilter.value || "").toLowerCase().trim();
+    iptvStreamsEl.innerHTML = "";
+    var visible = iptvStreams.filter(function (item) {
+      if (!q) return true;
+      return (item.name || "").toLowerCase().indexOf(q) !== -1;
+    });
+    if (!visible.length) {
+      iptvStreamsEl.innerHTML = '<p class="empty">No streams match this filter.</p>';
+      return;
+    }
+    visible.forEach(function (item) {
+      var row = document.createElement("div");
+      row.className = "stream-row";
+      row.style.cursor = "pointer";
+      row.innerHTML =
+        '<span style="font-size:.95rem;">' + escHtml(item.name || item.url) + '</span>' +
+        '<span style="font-family:monospace;font-size:.75rem;color:var(--muted);">OPEN \u2192</span>';
+      row.addEventListener("click", function () {
+        window.location.href = buildWatchUrl(item.url, iptvQuality.value, iptvSync.value);
+      });
+      iptvStreamsEl.appendChild(row);
+    });
+    iptvStatus.textContent = visible.length + " streams in " + list.name;
+  }
+
+  function loadIptvStreams() {
+    var listId = selectedIptvListId();
+    if (!listId) {
+      iptvStatus.textContent = "No IPTV list selected.";
+      iptvStreamsEl.innerHTML = "";
+      return;
+    }
+    iptvStatus.textContent = "Loading IPTV streams...";
+    iptvStreamsEl.innerHTML = "";
+    iptvLoadBtn.disabled = true;
+
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/iptv_streams?list=" + encodeURIComponent(listId), true);
+    xhr.timeout = 15000;
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) return;
+      iptvLoadBtn.disabled = false;
+      var data;
+      try { data = JSON.parse(xhr.responseText); } catch (e) {
+        iptvStatus.textContent = "Failed to parse response."; return;
+      }
+      if (data.error) { iptvStatus.textContent = "Error: " + data.error; return; }
+      iptvStreams = data.streams || [];
+      if (!iptvStreams.length) {
+        iptvStatus.textContent = "No streams found in this list.";
+        iptvStreamsEl.innerHTML = '<p class="empty">This list has no playable entries.</p>';
+        return;
+      }
+      iptvFilter.value = "";
+      renderIptvStreams(data.list || {name: "selected list"});
+    };
+    xhr.send();
+  }
+
+  function loadIptvLists(autoloadFirst) {
+    iptvStatus.textContent = "Scanning IPTV lists folder...";
+    iptvStreamsEl.innerHTML = "";
+    iptvRefreshBtn.disabled = true;
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/iptv_lists", true);
+    xhr.timeout = 10000;
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) return;
+      iptvRefreshBtn.disabled = false;
+      var data;
+      try { data = JSON.parse(xhr.responseText); } catch (e) {
+        iptvStatus.textContent = "Failed to parse response."; return;
+      }
+      if (data.error) { iptvStatus.textContent = "Error: " + data.error; return; }
+      iptvLists = data.lists || [];
+      renderIptvLists();
+      if (!iptvLists.length) {
+        iptvStatus.textContent = "No .m3u or .m3u8 files found.";
+        return;
+      }
+      iptvStatus.textContent = iptvLists.length + " IPTV lists found";
+      if (autoloadFirst) {
+        iptvListSel.selectedIndex = 0;
+        loadIptvStreams();
+      }
+    };
+    xhr.send();
+  }
+
+  iptvLoadBtn.addEventListener("click", loadIptvStreams);
+  iptvRefreshBtn.addEventListener("click", function () { loadIptvLists(false); });
+  iptvFilter.addEventListener("input", function () {
+    if (!iptvStreams.length) return;
+    var selected = iptvLists.find(function (item) { return item.id === selectedIptvListId(); }) || {name: "selected list"};
+    renderIptvStreams(selected);
+  });
+  var iptvOpened = false;
+  document.querySelector('[data-tab="iptv"]').addEventListener("click", function () {
+    if (iptvOpened) return;
+    iptvOpened = true;
+    loadIptvLists(true);
+  });
 
   // ── Feed tab ──
   var feedChannel  = document.getElementById("feed-channel");
@@ -1960,6 +2218,7 @@ def render_status_page() -> str:
         streams_html = "\n".join(rows)
 
     subs_status = "loaded" if os.path.isfile(SUBSCRIPTIONS_FILE) else "not mounted"
+    iptv_status = "mounted" if os.path.isdir(IPTV_LISTS_DIR) else "not mounted"
     return (STATUS_HTML
             .replace("{{stream_count}}", str(len(streams)))
             .replace("{{streams_html}}", streams_html)
@@ -1971,6 +2230,7 @@ def render_status_page() -> str:
             .replace("{{audio_delay_ms}}", str(AUDIO_DELAY_MS))
             .replace("{{local_media_video_delay_ms}}", str(LOCAL_MEDIA_VIDEO_DELAY_MS))
             .replace("{{subs_status}}", subs_status)
+            .replace("{{iptv_status}}", iptv_status)
             .replace("{{pluto_langs}}", ", ".join(PLUTO_LANGS))
             .replace("{{pluto_langs_json}}", json.dumps(PLUTO_LANGS))
             .replace("{{local_media_dir}}", LOCAL_MEDIA_DIR))
@@ -2034,6 +2294,36 @@ class Handler(BaseHTTPRequestHandler):
             return None, "Unsupported local media extension"
         return target, ""
 
+    @staticmethod
+    def _resolve_iptv_list_path(raw_list: str | None) -> tuple[str | None, str]:
+        if not raw_list:
+            return None, "Missing ?list= parameter"
+
+        requested = raw_list.strip()
+        if not requested:
+            return None, "Missing ?list= parameter"
+
+        base, lists, err = _scan_iptv_lists()
+        if err:
+            return None, err
+
+        request_lower = requested.lower()
+        for entry in lists:
+            if entry["id"].lower() == request_lower:
+                return os.path.join(base, entry["id"].replace("/", os.sep)), ""
+
+        # Allow resolving by friendly name (filename without extension).
+        by_name = [entry for entry in lists if entry["name"].lower() == request_lower]
+        if len(by_name) == 1:
+            return os.path.join(base, by_name[0]["id"].replace("/", os.sep)), ""
+        if len(by_name) > 1:
+            return None, (
+                f"Ambiguous IPTV list name '{requested}'. "
+                "Use the full list id/path from /iptv_lists."
+            )
+
+        return None, f"IPTV list not found: {requested}"
+
     def do_GET(self):
         parsed = urlparse(self.path)
         qs     = parse_qs(parsed.query)
@@ -2066,6 +2356,13 @@ class Handler(BaseHTTPRequestHandler):
 
         elif path == "/subscriptions":
             self._serve_subscriptions()
+
+        elif path == "/iptv_lists":
+            self._serve_iptv_lists()
+
+        elif path == "/iptv_streams":
+            list_name = qs.get("list", [None])[0]
+            self._serve_iptv_streams(list_name)
 
         elif path == "/local_media":
             self._serve_local_media()
@@ -2254,6 +2551,40 @@ class Handler(BaseHTTPRequestHandler):
         self._json({
             "synced_at": data.get("synced_at", ""),
             "channels":  data.get("channels", []),
+        })
+
+    # ── IPTV lists ────────────────────────────────────────────────────────────
+    def _serve_iptv_lists(self):
+        base, lists, err = _scan_iptv_lists()
+        if err:
+            self._error(503, err)
+            return
+        self._json({"base_dir": base, "lists": lists})
+
+    def _serve_iptv_streams(self, raw_list: str | None):
+        target, err = self._resolve_iptv_list_path(raw_list)
+        if not target:
+            code = 503 if "directory not found" in err.lower() else 400
+            self._error(code, err)
+            return
+        if not _has_supported_iptv_list_ext(target):
+            self._error(400, "Unsupported IPTV list extension (use .m3u or .m3u8)")
+            return
+        try:
+            with open(target, encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except Exception as e:
+            self._error(500, f"Failed to read IPTV list: {e}")
+            return
+
+        streams = _parse_iptv_m3u(content)
+        self._json({
+            "list": {
+                "name": os.path.splitext(os.path.basename(target))[0],
+                "path": os.path.relpath(target, os.path.abspath(IPTV_LISTS_DIR)).replace(os.sep, "/"),
+            },
+            "stream_count": len(streams),
+            "streams": streams,
         })
 
     def _serve_local_media(self):
