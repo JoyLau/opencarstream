@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tesla MJPEG Streamer
+OpenCarStream MJPEG Streamer
 Usage:
   http://yourserver/stream?url=https://youtube.com/watch?v=xxx
   http://yourserver/             → status page
@@ -843,7 +843,7 @@ STATUS_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Tesla Streamer</title>
+<title>OpenCarStream — Streaming for Tesla vehicles</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=Rajdhani:wght@300;500&display=swap');
   :root{--red:#e31937;--dark:#090909;--panel:#111117;--border:#252530;--text:#e0e0ee;--muted:#555568;}
@@ -887,11 +887,12 @@ STATUS_HTML = """<!DOCTYPE html>
   /* shared input style for start-stream row */
   #yt-id{flex:1;min-width:280px;background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-family:monospace;}
   select{background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-family:monospace;}
+  footer{margin-top:26px;color:var(--muted);font-size:.78rem;letter-spacing:.04em;text-align:center;max-width:760px;line-height:1.5;}
 </style>
 </head>
 <body>
-<h1>TESLA STREAMER</h1>
-<p class="sub">MJPEG video relay for Tesla browser</p>
+<h1>OPENCARSTREAM</h1>
+<p class="sub">A third-party streaming launcher for Tesla’s in-car browser</p>
 
 <div class="tabs">
   <button class="tab-btn active" data-tab="stream">Stream</button>
@@ -1137,6 +1138,8 @@ STATUS_HTML = """<!DOCTYPE html>
   </div>
 </div>
 
+<footer>Tesla is a trademark of Tesla, Inc. OpenCarStream is unofficial and not affiliated with or endorsed by Tesla. YouTube is a trademark of Google LLC, Twitch is a trademark of Twitch Interactive, Inc., and X/Twitter is a trademark of X Corp.; OpenCarStream is not affiliated with or endorsed by any of them.</footer>
+
 <script>
 (function () {
   // ── Tab switching ──
@@ -1181,7 +1184,7 @@ STATUS_HTML = """<!DOCTYPE html>
     return "https://www.youtube.com/watch?v=" + raw;
   }
 
-  function openStream() {
+  function OpenCarStream() {
     var raw = (idInput.value || "").trim();
     if (!raw) { idInput.focus(); return; }
     window.location.href = buildWatchUrl(
@@ -1189,9 +1192,9 @@ STATUS_HTML = """<!DOCTYPE html>
     );
   }
 
-  goButton.addEventListener("click", openStream);
+  goButton.addEventListener("click", OpenCarStream);
   idInput.addEventListener("keydown", function (e) {
-    if ((e.key || "") === "Enter" || e.keyCode === 13) openStream();
+    if ((e.key || "") === "Enter" || e.keyCode === 13) OpenCarStream();
   });
 
   // ── Twitch tab ──
@@ -1681,7 +1684,7 @@ WATCH_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Tesla Stream Watch</title>
+<title>OpenCarStream Watch</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=Rajdhani:wght@300;500&display=swap');
   :root{--red:#e31937;--dark:#090909;--panel:#111117;--border:#252530;--text:#e0e0ee;}
@@ -2314,7 +2317,7 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     log.info("═" * 52)
-    log.info("  Tesla MJPEG Streamer")
+    log.info("  OpenCarStream MJPEG Streamer")
     log.info(f"  Listening on http://{HOST}:{PORT}")
     log.info(f"  FPS={MJPEG_FPS}  Quality={FFMPEG_QUALITY}  "
              f"Res={STREAM_WIDTH}×{STREAM_HEIGHT}  MaxStreams={MAX_STREAMS}")

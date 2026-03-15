@@ -6,9 +6,9 @@ services:
       context: .
       args:
         PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
-    image: tesla-streamer:latest
+    image: opencarstream:latest
     pull_policy: never
-    container_name: tesla-streamer
+    container_name: opencarstream
     restart: unless-stopped
     ports:
       - "33333:8080"
@@ -39,7 +39,7 @@ services:
   #
   # nginx:
   #   image: nginx:alpine
-  #   container_name: tesla-nginx
+  #   container_name: opencarstream-nginx
   #   restart: unless-stopped
   #   depends_on:
   #     - streamer

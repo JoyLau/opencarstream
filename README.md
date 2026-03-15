@@ -1,4 +1,4 @@
-# Tesla MJPEG Streamer
+# OpenCarStream - MJPEG Streamer for Car Browsers
 
 Stream any YouTube video to your Tesla browser via MJPEG.  
 No `<video>` element → Tesla's driving speed-lock doesn't apply.
@@ -29,9 +29,9 @@ Tesla browser
 ### 1. Clone / copy this folder to your server
 
 ```bash
-scp -r tesla-streamer/ user@yourserver:~/
+scp -r opencarstream/ user@yourserver:~/
 ssh user@yourserver
-cd tesla-streamer
+cd opencarstream
 ```
 
 ### 2. Build and start
@@ -53,9 +53,15 @@ http://localhost:33333/health
 http://localhost:33333/
 ```
 
-### 4. Open in Tesla browser
+### 4. Open in car browser
 
 Navigate to your server's status page and use the **Stream** tab, or go directly to:
+
+```
+http://YOUR_SERVER_IP:33333/
+```
+
+or directly using the url
 
 ```
 http://YOUR_SERVER_IP:33333/watch?url=https://www.youtube.com/watch?v=VIDEO_ID
@@ -155,11 +161,11 @@ sudo apt update && sudo apt install cloudflared
 
 # Authenticate and create tunnel
 cloudflared tunnel login
-cloudflared tunnel create tesla-stream
-cloudflared tunnel route dns tesla-stream stream.yourdomain.com
+cloudflared tunnel create opencarstream
+cloudflared tunnel route dns opencarstream stream.yourdomain.com
 
 # Run (or add to systemd)
-cloudflared tunnel run --url http://localhost:33333 tesla-stream
+cloudflared tunnel run --url http://localhost:33333 opencarstream
 ```
 
 Tesla URL becomes: `https://stream.yourdomain.com/`
@@ -226,6 +232,14 @@ Stream tab.
 | `GET /subscriptions`            | JSON channel list from subscriptions.json        |
 | `GET /health`                   | `{"ok":true}` — for uptime monitors              |
 | `GET /status`                   | JSON list of active streams                      |
+
+---
+
+## Legal Notice
+
+OpenCarStream is a third-party, unofficial project.
+Tesla is a trademark of Tesla, Inc. OpenCarStream is unofficial and not affiliated with or endorsed by Tesla.
+YouTube is a trademark of Google LLC, Twitch is a trademark of Twitch Interactive, Inc., and X/Twitter is a trademark of X Corp.; OpenCarStream is not affiliated with or endorsed by any of them.
 
 ---
 
