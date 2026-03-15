@@ -1099,6 +1099,20 @@ STATUS_HTML = """<!DOCTYPE html>
     <div id="subs-list" style="display:flex;flex-direction:column;gap:0;"></div>
   </div>
 
+  <!-- YouTube search -->
+  <div class="card">
+    <h2>Search YouTube</h2>
+    <div class="feed-controls">
+      <input id="yt-search-input" type="text" placeholder="Search query…">
+      <button id="yt-search-go">SEARCH</button>
+    </div>
+    <div class="feed-status" id="yt-search-status"></div>
+    <div class="feed-grid" id="yt-search-grid"></div>
+    <div style="text-align:center;margin-top:14px;display:none;" id="yt-search-more-wrap">
+      <button id="yt-search-more" style="background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:8px 20px;font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:.08em;cursor:pointer;">LOAD MORE</button>
+    </div>
+  </div>
+
   <!-- Manual channel lookup -->
   <div class="card">
     <h2 id="feed-card-title">Channel recent uploads</h2>
@@ -1932,6 +1946,86 @@ STATUS_HTML = """<!DOCTYPE html>
 
   var feedMoreWrap = document.getElementById("feed-more-wrap");
   var feedMoreBtn  = document.getElementById("feed-more");
+
+  // ── YouTube search ──
+  var ytSearchInput    = document.getElementById("yt-search-input");
+  var ytSearchGoBtn    = document.getElementById("yt-search-go");
+  var ytSearchStatus   = document.getElementById("yt-search-status");
+  var ytSearchGrid     = document.getElementById("yt-search-grid");
+  var ytSearchMoreWrap = document.getElementById("yt-search-more-wrap");
+  var ytSearchMoreBtn  = document.getElementById("yt-search-more");
+  var ytSearchLimit    = 12;
+
+  function appendSearchCards(videos) {
+    videos.forEach(function (v) {
+      var card = document.createElement("div");
+      card.className = "feed-card";
+      var dur = fmtDuration(v.duration);
+      card.innerHTML =
+        '<img class="feed-thumb" src="' + (v.thumb || "") + '" loading="lazy" alt="">' +
+        '<div class="feed-info">' +
+        '<div class="feed-title">' + escHtml(v.title) + '</div>' +
+        (dur ? '<div class="feed-dur">' + escHtml(dur) + '</div>' : '') +
+        '</div>';
+      card.addEventListener("click", function () {
+        window.location.href = buildWatchUrl(v.url, feedQuality.value, feedSync.value);
+      });
+      ytSearchGrid.appendChild(card);
+    });
+  }
+
+  function runYtSearch(append) {
+    var q = (ytSearchInput.value || "").trim();
+    if (!q) { ytSearchInput.focus(); return; }
+    if (!append) {
+      ytSearchLimit = 12;
+      ytSearchGrid.innerHTML = "";
+      ytSearchMoreWrap.style.display = "none";
+    }
+    ytSearchStatus.textContent = append ? "Loading more…" : "Searching…";
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/ytsearch?q=" + encodeURIComponent(q) + "&limit=" + ytSearchLimit, true);
+    xhr.timeout = 30000;
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) return;
+      if (xhr.status < 200 || xhr.status >= 300) {
+        ytSearchStatus.textContent = "Error: " + xhr.status;
+        return;
+      }
+      var data;
+      try { data = JSON.parse(xhr.responseText); } catch (e) {
+        ytSearchStatus.textContent = "Failed to parse response.";
+        return;
+      }
+      if (data.error) {
+        ytSearchStatus.textContent = "Error: " + data.error;
+        return;
+      }
+      var videos = data.videos || [];
+      if (!videos.length) {
+        ytSearchStatus.textContent = "No results found.";
+        return;
+      }
+      if (append) {
+        var existing = ytSearchGrid.querySelectorAll(".feed-card").length;
+        appendSearchCards(videos.slice(existing));
+      } else {
+        appendSearchCards(videos);
+      }
+      ytSearchStatus.textContent = ytSearchGrid.querySelectorAll(".feed-card").length + " results";
+      ytSearchMoreWrap.style.display = "block";
+    };
+    xhr.send();
+  }
+
+  ytSearchGoBtn.addEventListener("click", function () { runYtSearch(false); });
+  ytSearchInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") runYtSearch(false);
+  });
+  ytSearchMoreBtn.addEventListener("click", function () {
+    ytSearchLimit += 12;
+    runYtSearch(true);
+  });
   var feedLimit    = 12;
 
   function appendFeedCards(videos) {
@@ -2469,6 +2563,20 @@ class Handler(BaseHTTPRequestHandler):
                 pass
             self._serve_feed(channel.strip(), limit)
 
+        elif path == "/ytsearch":
+            q = qs.get("q", [None])[0]
+            if not q:
+                self._error(400, "Missing ?q= parameter")
+                return
+            limit = 12
+            try:
+                raw_limit = qs.get("limit", [None])[0]
+                if raw_limit:
+                    limit = max(1, min(int(raw_limit), 50))
+            except (ValueError, TypeError):
+                pass
+            self._serve_ytsearch(q.strip(), limit)
+
         elif path == "/subscriptions":
             self._serve_subscriptions()
 
@@ -2812,6 +2920,60 @@ class Handler(BaseHTTPRequestHandler):
             })
 
         self._json({"channel": url, "videos": videos})
+
+    def _serve_ytsearch(self, query: str, limit: int = 12):
+        search_url = f"ytsearch{limit}:{query}"
+        try:
+            r = subprocess.run(
+                [
+                    "yt-dlp",
+                    "--flat-playlist",
+                    "--print", "%(id)s\t%(title)s\t%(duration)s\t%(thumbnail)s\t%(webpage_url)s",
+                    "--no-warnings",
+                    "--quiet",
+                    search_url,
+                ],
+                capture_output=True, text=True, timeout=25,
+            )
+        except subprocess.TimeoutExpired:
+            self._error(504, "yt-dlp timed out during search")
+            return
+        except Exception as e:
+            self._error(500, f"Search failed: {e}")
+            return
+
+        if r.returncode != 0:
+            err = r.stderr.strip() or "yt-dlp returned non-zero exit code"
+            self._error(502, f"Search failed: {err}")
+            return
+
+        videos = []
+        for line in r.stdout.strip().splitlines():
+            parts = line.split("\t", 4)
+            if len(parts) < 2:
+                continue
+            vid_id   = parts[0].strip()
+            title    = parts[1].strip()
+            duration = parts[2].strip() if len(parts) > 2 else ""
+            thumb    = parts[3].strip() if len(parts) > 3 else ""
+            webpage  = parts[4].strip() if len(parts) > 4 else ""
+            if not vid_id or vid_id == "NA":
+                continue
+            if webpage and webpage != "NA":
+                video_url = webpage
+            else:
+                video_url = f"https://www.youtube.com/watch?v={vid_id}"
+            if (not thumb or thumb == "NA"):
+                thumb = f"https://i.ytimg.com/vi/{vid_id}/mqdefault.jpg"
+            videos.append({
+                "id":       vid_id,
+                "title":    title,
+                "duration": duration,
+                "thumb":    thumb,
+                "url":      video_url,
+            })
+
+        self._json({"videos": videos})
 
     # ── MJPEG ─────────────────────────────────────────────────────────────────
     def _serve_mjpeg(self, stream: Stream, sync_ms: int = 0):
