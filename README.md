@@ -1,7 +1,8 @@
-# OpenCarStream - MJPEG Streamer for Car Browsers
+# OpenCarStream - MJPEG Streamer for the integrated browser in your car
 
-Stream any YouTube video to your Tesla browser via MJPEG.  
-No `<video>` element → Tesla's driving speed-lock doesn't apply.
+Stream any video to your Tesla browser via MJPEG.  
+No `<video>` element inside.
+Supports YouTube, Twitch, X/Twitter, Pluto TV, and more.
 
 ---
 
