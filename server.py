@@ -59,6 +59,7 @@ LOCAL_MEDIA_VIDEO_DELAY_MS = int(
     os.environ.get("LOCAL_MEDIA_VIDEO_DELAY_MS", "1500")
 )
 SUBSCRIPTIONS_FILE  = os.environ.get("SUBSCRIPTIONS_FILE", "/subscriptions.json")
+ACE_STREAMS_FILE    = os.environ.get("ACE_STREAMS_FILE", "/config/ace_streams.json")
 # Comma-separated list of Pluto TV language codes to load, e.g. "es,en"
 PLUTO_LANGS         = [l.strip() for l in os.environ.get("PLUTO_LANGS", "es,en").split(",") if l.strip()]
 PLUTO_REFRESH_SECS  = int(os.environ.get("PLUTO_REFRESH_SECS", str(60 * 60)))  # 1 h
@@ -505,6 +506,24 @@ def _parse_iptv_m3u(content: str) -> list[dict[str, str]]:
         pending_name = ""
 
     return streams
+
+
+_ace_streams_lock = threading.Lock()
+
+def _load_ace_streams() -> list[dict]:
+    if not os.path.isfile(ACE_STREAMS_FILE):
+        return []
+    try:
+        with open(ACE_STREAMS_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+def _save_ace_streams(streams: list[dict]) -> None:
+    os.makedirs(os.path.dirname(ACE_STREAMS_FILE) or ".", exist_ok=True)
+    with _ace_streams_lock:
+        with open(ACE_STREAMS_FILE, "w", encoding="utf-8") as f:
+            json.dump(streams, f, indent=2)
 
 
 def _scan_iptv_lists() -> tuple[str, list[dict[str, str]], str]:
@@ -1255,12 +1274,14 @@ STATUS_HTML = """<!DOCTYPE html>
 <div class="tab-panel" id="tab-local">
   <div class="card">
     <h2>Playback options</h2>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+    <div style="display:flex;flex-direction:column;gap:10px;">
       <div id="local-sync-btns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
-      <button id="local-refresh"
-              style="background:var(--red);color:white;border:0;border-radius:6px;padding:8px 14px;font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:.08em;cursor:pointer;">
-        REFRESH LIST
-      </button>
+      <div>
+        <button id="local-refresh"
+                style="background:var(--red);color:white;border:0;border-radius:6px;padding:8px 14px;font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:.08em;cursor:pointer;">
+          REFRESH LIST
+        </button>
+      </div>
     </div>
     <p style="font-size:.82rem;color:var(--muted);margin-top:12px;">
       Folder: <code style="color:var(--text);">{{local_media_dir}}</code>
@@ -1367,7 +1388,9 @@ STATUS_HTML = """<!DOCTYPE html>
     { value: "1500", label: "1.5s" },
     { value: "2000", label: "2s" },
     { value: "2500", label: "2.5s" },
-    { value: "3000", label: "3s" }
+    { value: "3000", label: "3s" },
+    { value: "3500", label: "3.5s" },
+    { value: "4000", label: "4s" }
   ], "{{audio_delay_ms}}");
 
   function buildWatchUrl(videoUrl, quality, sync) {
@@ -1427,7 +1450,11 @@ STATUS_HTML = """<!DOCTYPE html>
     { value: "500", label: "0.5s" },
     { value: "1000", label: "1s" },
     { value: "1500", label: "1.5s" },
-    { value: "2000", label: "2s" }
+    { value: "2000", label: "2s" },
+    { value: "2500", label: "2.5s" },
+    { value: "3000", label: "3s" },
+    { value: "3500", label: "3.5s" },
+    { value: "4000", label: "4s" }
   ], "{{audio_delay_ms}}");
 
   twitchLiveGo.addEventListener("click", function () {
@@ -1511,7 +1538,11 @@ STATUS_HTML = """<!DOCTYPE html>
     { value: "500", label: "0.5s" },
     { value: "1000", label: "1s" },
     { value: "1500", label: "1.5s" },
-    { value: "2000", label: "2s" }
+    { value: "2000", label: "2s" },
+    { value: "2500", label: "2.5s" },
+    { value: "3000", label: "3s" },
+    { value: "3500", label: "3.5s" },
+    { value: "4000", label: "4s" }
   ], "{{audio_delay_ms}}");
 
   var plutoByLang   = {};   // { lang: [channels] }
@@ -1670,7 +1701,11 @@ STATUS_HTML = """<!DOCTYPE html>
     { value: "500", label: "0.5s" },
     { value: "1000", label: "1s" },
     { value: "1500", label: "1.5s" },
-    { value: "2000", label: "2s" }
+    { value: "2000", label: "2s" },
+    { value: "2500", label: "2.5s" },
+    { value: "3000", label: "3s" },
+    { value: "3500", label: "3.5s" },
+    { value: "4000", label: "4s" }
   ], "{{audio_delay_ms}}");
 
   var iptvLists = [];
@@ -1847,7 +1882,9 @@ STATUS_HTML = """<!DOCTYPE html>
     { value: "1500", label: "1.5s" },
     { value: "2000", label: "2s" },
     { value: "2500", label: "2.5s" },
-    { value: "3000", label: "3s" }
+    { value: "3000", label: "3s" },
+    { value: "3500", label: "3.5s" },
+    { value: "4000", label: "4s" }
   ], "{{audio_delay_ms}}");
 
   // Subscriptions
@@ -2127,12 +2164,15 @@ STATUS_HTML = """<!DOCTYPE html>
     { value: "500", label: "0.5s" },
     { value: "1000", label: "1s" },
     { value: "1500", label: "1.5s" },
-    { value: "2000", label: "2s" }
+    { value: "2000", label: "2s" },
+    { value: "2500", label: "2.5s" },
+    { value: "3000", label: "3s" },
+    { value: "3500", label: "3.5s" },
+    { value: "4000", label: "4s" }
   ], "{{audio_delay_ms}}");
 
-  // Persist proxy host and saved streams in localStorage
-  var ACE_HOST_KEY    = "ace_proxy_host";
-  var ACE_STREAMS_KEY = "ace_saved_streams";
+  // Persist proxy host in localStorage; streams are stored server-side
+  var ACE_HOST_KEY = "ace_proxy_host";
 
   aceHost.value = localStorage.getItem(ACE_HOST_KEY) || "192.168.1.7:6878";
   aceHost.addEventListener("change", function () {
@@ -2172,20 +2212,10 @@ STATUS_HTML = """<!DOCTYPE html>
     if ((e.key || "") === "Enter" || e.keyCode === 13) openAceStream();
   });
 
-  // Saved streams
-  function loadSaved() {
-    try { return JSON.parse(localStorage.getItem(ACE_STREAMS_KEY) || "[]"); }
-    catch (e) { return []; }
-  }
-
-  function saveSaved(list) {
-    localStorage.setItem(ACE_STREAMS_KEY, JSON.stringify(list));
-  }
-
-  function renderSaved() {
-    var list = loadSaved();
+  // Saved streams (server-side)
+  function renderSaved(list) {
     aceSavedList.innerHTML = "";
-    if (!list.length) {
+    if (!list || !list.length) {
       aceSavedList.innerHTML = '<p class="empty">No saved streams yet.</p>';
       return;
     }
@@ -2205,13 +2235,24 @@ STATUS_HTML = """<!DOCTYPE html>
       });
       row.querySelector("[data-del]").addEventListener("click", function (e) {
         e.stopPropagation();
-        var saved = loadSaved();
-        saved.splice(idx, 1);
-        saveSaved(saved);
-        renderSaved();
+        var xhr = new XMLHttpRequest();
+        xhr.open("DELETE", "/ace_streams?idx=" + idx, true);
+        xhr.onload = function () {
+          try { renderSaved(JSON.parse(xhr.responseText).streams); } catch(ex) {}
+        };
+        xhr.send();
       });
       aceSavedList.appendChild(row);
     });
+  }
+
+  function fetchSaved() {
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/ace_streams", true);
+    xhr.onload = function () {
+      try { renderSaved(JSON.parse(xhr.responseText).streams); } catch(ex) {}
+    };
+    xhr.send();
   }
 
   aceSaveBtn.addEventListener("click", function () {
@@ -2220,15 +2261,18 @@ STATUS_HTML = """<!DOCTYPE html>
     if (!name || !raw) return;
     var cid = aceContentId(raw);
     if (!cid) return;
-    var saved = loadSaved();
-    saved.push({name: name, id: cid});
-    saveSaved(saved);
+    var xhr = new XMLHttpRequest();
+    xhr.open("POST", "/ace_streams", true);
+    xhr.setRequestHeader("Content-Type", "application/json");
+    xhr.onload = function () {
+      try { renderSaved(JSON.parse(xhr.responseText).streams); } catch(ex) {}
+    };
     aceSaveName.value = "";
     aceSaveId.value   = "";
-    renderSaved();
+    xhr.send(JSON.stringify({name: name, id: cid}));
   });
 
-  renderSaved();
+  fetchSaved();
 
   // ── Local Media tab ──
   var localRefresh = document.getElementById("local-refresh");
@@ -2236,14 +2280,16 @@ STATUS_HTML = """<!DOCTYPE html>
   var localList    = document.getElementById("local-list");
 
   var localSync = createButtonGroup("local-sync-btns", [
-    { value: "{{local_media_video_delay_ms}}", label: "{{local_media_video_delay_ms}}ms" },
     { value: "0", label: "0s" },
     { value: "500", label: "0.5s" },
     { value: "1000", label: "1s" },
+    { value: "1500", label: "1.5s" },
     { value: "2000", label: "2s" },
     { value: "2500", label: "2.5s" },
-    { value: "3000", label: "3s" }
-  ], "1500");
+    { value: "3000", label: "3s" },
+    { value: "3500", label: "3.5s" },
+    { value: "4000", label: "4s" }
+  ], "{{local_media_video_delay_ms}}");
 
   function renderLocalFiles(files) {
     localList.innerHTML = "";
@@ -2756,8 +2802,61 @@ class Handler(BaseHTTPRequestHandler):
                 stream = registry.get_or_create(video_url, quality=quality)
             self._serve_audio(stream, sync_ms=sync_ms)
 
+        elif path == "/ace_streams":
+            self._serve_ace_streams()
+
         else:
             self._error(404, "Not found")
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        path   = parsed.path.rstrip("/") or "/"
+
+        if path == "/ace_streams":
+            length = int(self.headers.get("Content-Length", 0))
+            body   = self.rfile.read(length)
+            try:
+                item = json.loads(body)
+            except Exception:
+                self._error(400, "Invalid JSON")
+                return
+            name = (item.get("name") or "").strip()
+            cid  = (item.get("id")   or "").strip()
+            if not name or not cid:
+                self._error(400, "Missing name or id")
+                return
+            streams = _load_ace_streams()
+            streams.append({"name": name, "id": cid})
+            _save_ace_streams(streams)
+            self._json({"ok": True, "streams": streams})
+        else:
+            self._error(404, "Not found")
+
+    def do_DELETE(self):
+        parsed = urlparse(self.path)
+        path   = parsed.path.rstrip("/") or "/"
+
+        if path == "/ace_streams":
+            qs  = parse_qs(parsed.query)
+            idx_raw = qs.get("idx", [None])[0]
+            try:
+                idx = int(idx_raw)
+            except (TypeError, ValueError):
+                self._error(400, "Missing or invalid ?idx= parameter")
+                return
+            streams = _load_ace_streams()
+            if idx < 0 or idx >= len(streams):
+                self._error(404, "Index out of range")
+                return
+            streams.pop(idx)
+            _save_ace_streams(streams)
+            self._json({"ok": True, "streams": streams})
+        else:
+            self._error(404, "Not found")
+
+    # ── Ace streams ───────────────────────────────────────────────────────────
+    def _serve_ace_streams(self):
+        self._json({"streams": _load_ace_streams()})
 
     # ── Subscriptions ─────────────────────────────────────────────────────────
     def _serve_subscriptions(self):

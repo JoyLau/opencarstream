@@ -34,6 +34,7 @@ services:
       # Avoid nested bind mounts under another read-only mount.
       # - /home/santi/videos:/media/home-videos:ro
       # - /mnt/nas/media:/media/nas-media:ro
+      - ./config:/config
 
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
