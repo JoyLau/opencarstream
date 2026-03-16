@@ -19,8 +19,8 @@ services:
     #   - "33333:33333"   # used when network_mode is not host
     environment:
       PORT:          33333
-      MJPEG_FPS:     24
-      FFMPEG_QUALITY: 28   # 1=best quality, 31=smallest file
+      MJPEG_FPS:     50  # use 24 to reduce latency but 50 is more fluid
+      FFMPEG_QUALITY: 20   # 1=best quality, 31=smallest file
       STREAM_WIDTH:  1280  # use 1920 for 1080p
       STREAM_HEIGHT: 720   # use 1080 for 1080p
       MAX_STREAMS:   3    # max parallel videos
