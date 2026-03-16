@@ -745,10 +745,12 @@ def _start_muxed_pipeline(stream: Stream):
         f"pipe:{audio_w}",
     ]
 
+    seek_args = ["-ss", str(int(stream.seek_s))] if stream.seek_s > 0 else []
     ff_cmd = [
         "ffmpeg",
         "-loglevel", "error",
         *_direct_input_args(stream.url),
+        *seek_args,
         "-probesize", "20M",
         "-analyzeduration", "10M",
         "-i", _ffmpeg_input_target(stream.url),
@@ -2657,6 +2659,7 @@ WATCH_HTML = """<!DOCTYPE html>
   var syncMs = "{{sync_ms}}";
   var videoUrl = "{{video_url}}";
   var videoQuality = "{{video_quality}}";
+  var localFile = "{{local_file}}";
   if (!sid) {
     window.location.href = "/";
     return;
@@ -2731,7 +2734,7 @@ WATCH_HTML = """<!DOCTYPE html>
   // Read seek offset already applied (so accumulated offset stays correct
   // if the user seeks multiple times).
   var params = new URLSearchParams(window.location.search);
-  var baseSeekS = parseInt(params.get("seek") || "0", 10) || 0;
+  var baseSeekS = parseInt("{{seek_s}}", 10) || parseInt(params.get("seek") || "0", 10) || 0;
   var pendingOffsetS = 0;
   var seekTimer = null;
   var countdownInterval = null;
@@ -2762,14 +2765,20 @@ WATCH_HTML = """<!DOCTYPE html>
       var targetSeek = Math.max(0, baseSeekS + pendingOffsetS);
       seekPending.textContent = "Reloading\u2026";
       seekCancel.style.display = "none";
-      var watchUrl = "/watch?url=" + encodeURIComponent(videoUrl) + "&seek=" + targetSeek;
-      if (videoQuality) watchUrl += "&quality=" + encodeURIComponent(videoQuality);
-      if (syncMs && syncMs !== "0") watchUrl += "&sync=" + encodeURIComponent(syncMs);
+      var watchUrl;
+      if (localFile) {
+        watchUrl = "/local_watch?file=" + encodeURIComponent(localFile) + "&seek=" + targetSeek;
+        if (syncMs && syncMs !== "0") watchUrl += "&sync=" + encodeURIComponent(syncMs);
+      } else {
+        watchUrl = "/watch?url=" + encodeURIComponent(videoUrl) + "&seek=" + targetSeek;
+        if (videoQuality) watchUrl += "&quality=" + encodeURIComponent(videoQuality);
+        if (syncMs && syncMs !== "0") watchUrl += "&sync=" + encodeURIComponent(syncMs);
+      }
       window.location.href = watchUrl;
     }, SEEK_DEBOUNCE_MS);
   }
 
-  if (videoUrl) {
+  if (videoUrl || localFile) {
     document.querySelectorAll(".seek-btn").forEach(function (btn) {
       btn.addEventListener("click", function () {
         pendingOffsetS = Math.max(-baseSeekS, pendingOffsetS + parseInt(btn.getAttribute("data-mins"), 10) * 60);
@@ -2785,7 +2794,7 @@ WATCH_HTML = """<!DOCTYPE html>
       seekCancel.style.display = "none";
     });
   } else {
-    // Seek not available (e.g. direct stream, local file)
+    // Seek not available (e.g. direct stream)
     document.querySelector(".seek-bar").style.display = "none";
   }
 })();
@@ -2832,12 +2841,15 @@ def render_status_page() -> str:
             .replace("{{pluto_langs_json}}", json.dumps(PLUTO_LANGS))
             .replace("{{local_media_dir}}", LOCAL_MEDIA_DIR))
 
-def render_watch_page(stream_id: str, sync_ms: int, video_url: str = "", quality: int | None = None) -> str:
+def render_watch_page(stream_id: str, sync_ms: int, video_url: str = "", quality: int | None = None,
+                      local_file: str = "", seek_s: int = 0) -> str:
     return (WATCH_HTML
             .replace("{{stream_id}}", stream_id)
             .replace("{{sync_ms}}", str(sync_ms))
             .replace("{{video_url}}", video_url)
-            .replace("{{video_quality}}", str(quality or "")))
+            .replace("{{video_quality}}", str(quality or ""))
+            .replace("{{local_file}}", local_file)
+            .replace("{{seek_s}}", str(seek_s)))
 
 
 # ── HTTP handler ──────────────────────────────────────────────────────────────
@@ -2984,6 +2996,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/local_watch":
             raw_file = qs.get("file", [None])[0]
             raw_sync = qs.get("sync", [None])[0]
+            raw_seek = qs.get("seek", [None])[0]
             if raw_sync is None or raw_sync == "":
                 sync_ms = LOCAL_MEDIA_VIDEO_DELAY_MS
             else:
@@ -2992,6 +3005,12 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError as e:
                     self._error(400, str(e))
                     return
+            seek_s = 0
+            if raw_seek:
+                try:
+                    seek_s = max(0, int(raw_seek))
+                except ValueError:
+                    pass
             local_file, err = self._resolve_local_media_path(raw_file)
             if not local_file:
                 self._error(400, err)
@@ -3003,6 +3022,8 @@ class Handler(BaseHTTPRequestHandler):
                 quality=None,
                 reuse_existing=False,
             )
+            if seek_s > 0:
+                stream.seek_s = float(seek_s)
             # Warm local playback so configured sync delay reflects timeline
             # delay rather than ffmpeg startup overhead.
             if stream.status == "starting" and stream._ff_proc is None:
@@ -3014,7 +3035,7 @@ class Handler(BaseHTTPRequestHandler):
                 and time.time() < warm_deadline
             ):
                 time.sleep(0.05)
-            self._html(render_watch_page(stream.id, sync_ms))
+            self._html(render_watch_page(stream.id, sync_ms, local_file=raw_file or "", seek_s=seek_s))
 
         elif path == "/pluto_channels":
             lang = qs.get("lang", [PLUTO_LANGS[0]])[0]
