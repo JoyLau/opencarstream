@@ -62,6 +62,7 @@ LOCAL_MEDIA_VIDEO_DELAY_MS = int(
 )
 SUBSCRIPTIONS_FILE  = os.environ.get("SUBSCRIPTIONS_FILE", "/config/subscriptions.json")
 ACE_STREAMS_FILE    = os.environ.get("ACE_STREAMS_FILE", "/config/ace_streams.json")
+BILI_SEARCH_HISTORY_FILE = os.environ.get("BILI_SEARCH_HISTORY_FILE", "/config/bilibili_search_result.json")
 # Comma-separated list of Pluto TV language codes to load, e.g. "es,en"
 PLUTO_LANGS         = [l.strip() for l in os.environ.get("PLUTO_LANGS", "es,en").split(",") if l.strip()]
 PLUTO_REFRESH_SECS  = int(os.environ.get("PLUTO_REFRESH_SECS", str(60 * 60)))  # 1 h
@@ -612,6 +613,34 @@ def _save_ace_streams(streams: list[dict]) -> None:
     with _ace_streams_lock:
         with open(ACE_STREAMS_FILE, "w", encoding="utf-8") as f:
             json.dump(streams, f, indent=2)
+
+
+_bili_search_lock = threading.Lock()
+
+def _load_bili_search_history() -> list[dict]:
+    """加载 bilibili 搜索历史"""
+    if not os.path.isfile(BILI_SEARCH_HISTORY_FILE):
+        return []
+    try:
+        with open(BILI_SEARCH_HISTORY_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+def _append_bili_search_result(result: dict) -> None:
+    """追加一条 bilibili 搜索结果到历史文件"""
+    os.makedirs(os.path.dirname(BILI_SEARCH_HISTORY_FILE) or ".", exist_ok=True)
+    with _bili_search_lock:
+        history = _load_bili_search_history()
+        # 添加时间戳
+        result["saved_at"] = int(time.time())
+        # 插入到开头（倒序）
+        history.insert(0, result)
+        # 限制最大数量，避免文件过大
+        if len(history) > 100:
+            history = history[:100]
+        with open(BILI_SEARCH_HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2, ensure_ascii=False)
 
 
 def _scan_iptv_lists() -> tuple[str, list[dict[str, str]], str]:
@@ -2413,6 +2442,46 @@ STATUS_HTML = """<!DOCTYPE html>
     runBiliSearch(true);
   });
 
+  // 加载 bilibili 搜索历史
+  function loadBiliSearchHistory() {
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/bili_search_history", true);
+    xhr.timeout = 10000;
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) return;
+      if (xhr.status < 200 || xhr.status >= 300) return;
+      try {
+        var data = JSON.parse(xhr.responseText);
+        var history = data.history || [];
+        if (!history.length) return;
+        // 展示历史数据（每个搜索结果的第一条视频作为代表）
+        history.forEach(function (item) {
+          if (!item.videos || !item.videos.length) return;
+          var videos = item.videos;
+          videos.forEach(function (v) {
+            var card = document.createElement("div");
+            card.className = "feed-card";
+            var dur = fmtDuration(v.duration);
+            card.innerHTML =
+              '<img class="feed-thumb" src="' + (v.thumb || "") + '" loading="lazy" alt="">' +
+              '<div class="feed-info">' +
+              '<div class="feed-title">' + escHtml(v.title) + '</div>' +
+              (dur ? '<div class="feed-dur">' + escHtml(dur) + '</div>' : '') +
+              '</div>';
+            card.addEventListener("click", function () {
+              window.location.href = buildWatchUrl(v.url, biliQuality.value, biliSync.value);
+            });
+            biliSearchGrid.appendChild(card);
+          });
+        });
+        biliSearchStatus.textContent = biliSearchGrid.querySelectorAll(".feed-card").length + " 个历史结果";
+        biliSearchMoreWrap.style.display = "none";
+      } catch (e) {}
+    };
+    xhr.send();
+  }
+  loadBiliSearchHistory();  // 页面加载时获取历史数据
+
   var feedLimit    = 12;
 
   function appendFeedCards(videos) {
@@ -3197,7 +3266,7 @@ class Handler(BaseHTTPRequestHandler):
             if not q:
                 self._error(400, "Missing ?q= parameter")
                 return
-            limit = 12
+            limit = 6
             try:
                 raw_limit = qs.get("limit", [None])[0]
                 if raw_limit:
@@ -3205,6 +3274,9 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, TypeError):
                 pass
             self._serve_bilisearch(q.strip(), limit)
+
+        elif path == "/bili_search_history":
+            self._json({"history": _load_bili_search_history()})
 
         elif path == "/subscriptions":
             self._serve_subscriptions()
@@ -3695,6 +3767,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _serve_bilisearch(self, query: str, limit: int = 12):
         """Search Bilibili videos using yt-dlp."""
+        log.info(f"[bilisearch] Starting search for: {query}")
         search_url = f"bilisearch{limit}:{query}"
         try:
             r = subprocess.run(
@@ -3703,9 +3776,10 @@ class Handler(BaseHTTPRequestHandler):
                     "--print", "%(id)s\t%(title)s\t%(duration)s\t%(thumbnail)s\t%(webpage_url)s",
                     "--no-warnings",
                     "--quiet",
+                    "--cookies", "bili_cookies.txt",
                     search_url,
                 ],
-                capture_output=True, text=True, timeout=25,
+                capture_output=True, text=True, timeout=60,
             )
         except subprocess.TimeoutExpired:
             self._error(504, "yt-dlp timed out during search")
@@ -3743,6 +3817,13 @@ class Handler(BaseHTTPRequestHandler):
                 "duration": duration,
                 "thumb":    thumb,
                 "url":      video_url,
+            })
+
+        # 保存搜索结果到历史文件
+        if videos:
+            _append_bili_search_result({
+                "query": query,
+                "videos": videos,
             })
 
         self._json({"videos": videos})
