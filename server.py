@@ -8,6 +8,7 @@ Usage:
 """
 
 import re
+import select
 import subprocess
 import threading
 import time
@@ -106,6 +107,7 @@ class Stream:
         self._audio_ready  = threading.Event()
         self._audio_done   = False
         self._frame_history = deque(maxlen=max(MJPEG_FPS * 12, 120))
+        self._pipeline_started = False  # 防止重复启动 pipeline
 
     def stop(self):
         for proc in [self._ff_proc, self._yt_proc, self._audio_proc]:
@@ -113,7 +115,13 @@ class Stream:
                 try:
                     proc.terminate()
                     proc.wait(timeout=3)
-                except Exception:
+                except Exception as e:
+                    log.error(f"[{self.id}] Failed to kill: {e}")
+                    try:
+                        proc.kill()
+                        proc.wait(timeout=1)
+                    except Exception:
+                        pass
                     pass
         self._ff_proc     = None
         self._yt_proc     = None
@@ -1164,10 +1172,10 @@ STATUS_HTML = """<!DOCTYPE html>
 <div class="tabs">
   <button class="tab-btn active" data-tab="stream">Stream</button>
   <button class="tab-btn" data-tab="feed">YouTube</button>
-  <button class="tab-btn" data-tab="twitch">Twitch</button>
-  <button class="tab-btn" data-tab="pluto">Pluto TV</button>
+  <button class="tab-btn" data-tab="twitch" style="display:none">Twitch</button>
+  <button class="tab-btn" data-tab="pluto" style="display:none">Pluto TV</button>
   <button class="tab-btn" data-tab="iptv">IPTV</button>
-  <button class="tab-btn" data-tab="ace">Acestream</button>
+  <button class="tab-btn" data-tab="ace" style="display:none">Acestream</button>
   <button class="tab-btn" data-tab="local">Local Media</button>
   <button class="tab-btn" data-tab="info">Info</button>
 </div>
@@ -1519,7 +1527,7 @@ STATUS_HTML = """<!DOCTYPE html>
 
   function resolveInputUrl(raw) {
     // Full URL (YouTube, Twitch, X/Twitter, etc.) — pass through
-    if (/^https?:\/\//i.test(raw)) return raw;
+    if (/^https?:\\/\\//i.test(raw)) return raw;
     // Bare YouTube video ID (11 alphanum chars)
     if (/^[A-Za-z0-9_-]{11}$/.test(raw)) {
       return "https://www.youtube.com/watch?v=" + raw;
@@ -2396,9 +2404,9 @@ STATUS_HTML = """<!DOCTYPE html>
   function aceContentId(raw) {
     raw = (raw || "").trim();
     // acestream://HASH → extract hash
-    if (/^acestream:\/\//i.test(raw)) raw = raw.slice(12);
+    if (/^acestream:\\/\\//i.test(raw)) raw = raw.slice(12);
     // Full URL → extract id param
-    if (/^https?:\/\//i.test(raw)) {
+    if (/^https?:\\/\\//i.test(raw)) {
       var m = raw.match(/[?&]id=([a-f0-9]{40})/i);
       if (m) return m[1];
     }
@@ -2633,16 +2641,34 @@ WATCH_HTML = """<!DOCTYPE html>
   .seek-btn.active{border-color:var(--red);color:var(--red);}
   .seek-pending{font-family:monospace;font-size:.9rem;color:var(--red);min-width:80px;}
   .seek-cancel{background:none;border:none;color:#888;font-size:.8rem;cursor:pointer;text-decoration:underline;padding:0;}
+  /* 点击播放遮罩 */
+  .play-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:1000;cursor:pointer;}
+  .play-overlay.hidden{display:none;}
+  .play-btn{width:80px;height:80px;border-radius:50%;background:var(--red);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform .15s,background .15s;}
+  .play-btn:hover{transform:scale(1.1);background:#ff3d5a;}
+  .play-btn::after{content:'';width:0;height:0;border-left:28px solid #fff;border-top:16px solid transparent;border-bottom:16px solid transparent;margin-left:6px;}
+  .play-hint{color:var(--text);font-family:'Rajdhani',sans-serif;font-size:1.1rem;margin-top:16px;opacity:0.8;}
+  /* 音画同步控制 */
+  .sync-bar{display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap;}
+  .sync-label{font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:.08em;color:var(--muted);}
+  .sync-btn{background:var(--panel);border:1px solid var(--border);color:var(--text);font-family:'Rajdhani',sans-serif;font-size:.9rem;font-weight:500;padding:5px 10px;border-radius:5px;cursor:pointer;transition:border-color .15s,color .15s;}
+  .sync-btn:hover{border-color:var(--red);color:var(--red);}
+  .sync-offset{font-family:monospace;font-size:.9rem;color:var(--red);min-width:70px;text-align:center;}
 </style>
 </head>
 <body>
+  <!-- 点击播放遮罩 -->
+  <div id="play-overlay" class="play-overlay">
+    <div class="play-btn"></div>
+    <div class="play-hint">点击开始播放</div>
+  </div>
   <div class="top">
     <div class="title">MJPEG + AUDIO</div>
     <a class="back" href="/">← Back</a>
   </div>
   <div class="wrap">
     <img id="mjpeg" alt="Live MJPEG stream">
-    <audio id="audio" controls autoplay playsinline></audio>
+    <audio id="audio" controls playsinline></audio>
     <div class="seek-bar">
       <button class="seek-btn" data-mins="-10">-10 min</button>
       <button class="seek-btn" data-mins="1">+1 min</button>
@@ -2650,6 +2676,16 @@ WATCH_HTML = """<!DOCTYPE html>
       <button class="seek-btn" data-mins="10">+10 min</button>
       <span id="seek-pending" class="seek-pending"></span>
       <button id="seek-cancel" class="seek-cancel" style="display:none">cancel</button>
+    </div>
+    <!-- 音画同步控制 -->
+    <div class="sync-bar">
+      <span class="sync-label">音画同步</span>
+      <button class="sync-btn" data-offset="-1">音频 -1s</button>
+      <button class="sync-btn" data-offset="-0.5">音频 -0.5s</button>
+      <button class="sync-btn" data-offset="0">重置</button>
+      <button class="sync-btn" data-offset="0.5">音频 +0.5s</button>
+      <button class="sync-btn" data-offset="1">音频 +1s</button>
+      <span id="sync-offset" class="sync-offset">偏移: 0s</span>
     </div>
     <div id="diag" class="diag"></div>
   </div>
@@ -2670,35 +2706,27 @@ WATCH_HTML = """<!DOCTYPE html>
   var diag = document.getElementById("diag");
   var seekPending = document.getElementById("seek-pending");
   var seekCancel = document.getElementById("seek-cancel");
+  var playOverlay = document.getElementById("play-overlay");
+  var started = false;
 
-  // Start audio first so its pipeline is already running and buffered.
-  audio.src = "/audio?sid=" + encodeURIComponent(sid);
-  audio.preload = "auto";
-  audio.muted = false;
-  audio.volume = 1.0;
-  try {
-    var p = audio.play();
-    if (p && typeof p.catch === "function") p.catch(function () {});
-  } catch (e) {}
+  // 点击遮罩开始播放
+  function startPlayback() {
+    if (started) return;
+    started = true;
+    playOverlay.classList.add("hidden");
+    // 同时开始音视频播放，确保同步
+    audio.src = "/audio?sid=" + encodeURIComponent(sid);
+    audio.play().catch(function () {});
+    img.src = "/stream" + q;
+  }
 
-  // Some browsers (including embedded WebViews) may block autoplay without
-  // interaction. Retry on first user gesture.
-  var retryPlay = function () {
-    try {
-      var p2 = audio.play();
-      if (p2 && typeof p2.catch === "function") p2.catch(function () {});
-    } catch (e) {}
-    window.removeEventListener("click", retryPlay, true);
-    window.removeEventListener("touchstart", retryPlay, true);
-    window.removeEventListener("keydown", retryPlay, true);
-  };
-  window.addEventListener("click", retryPlay, true);
-  window.addEventListener("touchstart", retryPlay, true);
-  window.addEventListener("keydown", retryPlay, true);
-
-  // Always request video immediately; server-side frame buffering applies
-  // sync_ms without skipping content from the beginning.
-  img.src = "/stream" + q;
+  playOverlay.addEventListener("click", startPlayback);
+  document.addEventListener("keydown", function onKey(e) {
+    if (!started && e.key !== "Tab") {
+      startPlayback();
+      document.removeEventListener("keydown", onKey);
+    }
+  });
 
   function showDiag(message) {
     diag.style.display = "block";
@@ -2728,6 +2756,39 @@ WATCH_HTML = """<!DOCTYPE html>
       }
     };
     xhr.send();
+  });
+
+  // ── 音画同步控制 ────────────────────────────────────────────────────────
+  var audioSyncOffset = 0;  // 累计音频偏移（秒）
+  var syncOffsetDisplay = document.getElementById("sync-offset");
+
+  function updateSyncDisplay() {
+    var sign = audioSyncOffset >= 0 ? "+" : "";
+    syncOffsetDisplay.textContent = "偏移: " + sign + audioSyncOffset.toFixed(1) + "s";
+  }
+
+  function adjustAudioSync(offsetSec) {
+    if (!started) return;
+    if (offsetSec === 0) {
+      // 重置
+      audioSyncOffset = 0;
+    } else {
+      // 调整音频播放位置
+      var newTime = audio.currentTime + offsetSec;
+      if (newTime < 0) newTime = 0;
+      if (newTime < audio.duration || audio.duration === Infinity || isNaN(audio.duration)) {
+        audio.currentTime = newTime;
+        audioSyncOffset += offsetSec;
+      }
+    }
+    updateSyncDisplay();
+  }
+
+  document.querySelectorAll(".sync-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var offset = parseFloat(btn.getAttribute("data-offset"));
+      adjustAudioSync(offset);
+    });
   });
 
   // ── Seek controls ────────────────────────────────────────────────────────
@@ -3024,17 +3085,7 @@ class Handler(BaseHTTPRequestHandler):
             )
             if seek_s > 0:
                 stream.seek_s = float(seek_s)
-            # Warm local playback so configured sync delay reflects timeline
-            # delay rather than ffmpeg startup overhead.
-            if stream.status == "starting" and stream._ff_proc is None:
-                threading.Thread(target=run_pipeline, args=(stream,), daemon=True).start()
-            warm_deadline = time.time() + 8.0
-            while (
-                stream.frame is None
-                and stream.status not in ("error", "done")
-                and time.time() < warm_deadline
-            ):
-                time.sleep(0.05)
+            # 不再预热，等用户点击遮罩后通过 /stream 和 /audio 请求启动 pipeline
             self._html(render_watch_page(stream.id, sync_ms, local_file=raw_file or "", seek_s=seek_s))
 
         elif path == "/pluto_channels":
@@ -3468,10 +3519,12 @@ class Handler(BaseHTTPRequestHandler):
         registry.cleanup_done()
         delay_s = max(0.0, sync_ms / 1000.0)
 
-        # Start pipeline if not already running
-        if stream.status == "starting" and stream._ff_proc is None:
-            threading.Thread(target=run_pipeline,
-                             args=(stream,), daemon=True).start()
+        # Start pipeline if not already running (加锁防止竞态条件)
+        with stream.lock:
+            if stream.status == "starting" and not stream._pipeline_started:
+                stream._pipeline_started = True
+                threading.Thread(target=run_pipeline,
+                                 args=(stream,), daemon=True).start()
 
         # Wait up to 20s for first frame
         deadline = time.time() + 20
@@ -3547,6 +3600,9 @@ class Handler(BaseHTTPRequestHandler):
 
         except (BrokenPipeError, ConnectionResetError):
             log.info(f"[{stream.id}] Client disconnected: {self.client_address[0]}")
+        finally:
+            # 客户端断开连接后，停止所有进程
+            stream.stop()
 
     @staticmethod
     def _launch_audio_pipeline(url: str, seek_s: float):
@@ -3600,9 +3656,12 @@ class Handler(BaseHTTPRequestHandler):
 
         if _is_direct_stream(stream.url):
             # Audio may be requested before /stream starts the pipeline.
-            if stream.status == "starting" and stream._ff_proc is None:
-                threading.Thread(target=run_pipeline,
-                                 args=(stream,), daemon=True).start()
+            # 加锁防止竞态条件
+            with stream.lock:
+                if stream.status == "starting" and not stream._pipeline_started:
+                    stream._pipeline_started = True
+                    threading.Thread(target=run_pipeline,
+                                     args=(stream,), daemon=True).start()
             # For direct streams the audio is already being captured into
             # stream._audio_chunks by _start_audio_buffer. Drain from there
             # instead of opening a second connection to the source.
@@ -3632,6 +3691,9 @@ class Handler(BaseHTTPRequestHandler):
                 log.info(f"[{stream.id}] Direct audio ended (bytes={sent_bytes})")
             except (BrokenPipeError, ConnectionResetError):
                 pass
+            finally:
+                # 客户端断开连接后，停止所有进程
+                stream.stop()
             return
 
         yt_proc = None
@@ -3647,6 +3709,14 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
 
             while True:
+                # 检查视频 stream 是否已停止
+                if stream.status in ("error", "done"):
+                    log.info(f"[{stream.id}] Audio stopping (video ended)")
+                    break
+                # 设置非阻塞读取超时
+                readable, _, _ = select.select([ff_proc.stdout], [], [], 1.0)
+                if not readable:
+                    continue  # 超时，重新检查 stream 状态
                 chunk = ff_proc.stdout.read(16384)
                 if not chunk:
                     break
@@ -3655,10 +3725,15 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
         finally:
+            # 只清理自己启动的音频进程，不影响视频进程
+            log.info(f"[{stream.id}] Audio cleanup (yt_proc={yt_proc.pid if yt_proc else None}, ff_proc={ff_proc.pid if ff_proc else None})")
             for proc in (ff_proc, yt_proc):
                 if proc:
                     try:
                         proc.terminate()
+                        proc.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
                     except Exception:
                         pass
 
