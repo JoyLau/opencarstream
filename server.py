@@ -2792,7 +2792,7 @@ WATCH_HTML = """<!DOCTYPE html>
   </div>
   <div class="top">
     <div class="title">MJPEG + AUDIO</div>
-    <a class="back" href="/">← Back</a>
+    <a class="back" href="#" id="back-link">← Back</a>
   </div>
   <div class="wrap">
     <img id="mjpeg" alt="Live MJPEG stream">
@@ -2855,6 +2855,30 @@ WATCH_HTML = """<!DOCTYPE html>
       document.removeEventListener("keydown", onKey);
     }
   });
+
+  // 返回按钮：尝试后退，如果无法后退则跳转首页
+  var backLink = document.getElementById("back-link");
+  backLink.addEventListener("click", function (e) {
+    e.preventDefault();
+    // 记录当前 URL，用于检测是否成功后退
+    var currentUrl = window.location.href;
+    window.history.back();
+    // 如果 100ms 后还在当前页面，说明无法后退，跳转首页
+    setTimeout(function () {
+      if (window.location.href === currentUrl) {
+        window.location.href = "/";
+      }
+    }, 100);
+  });
+
+  // 页面离开时主动停止流，确保服务端清理进程
+  function stopStream() {
+    if (sid && navigator.sendBeacon) {
+      navigator.sendBeacon("/stop?sid=" + encodeURIComponent(sid));
+    }
+  }
+  window.addEventListener("pagehide", stopStream);
+  window.addEventListener("beforeunload", stopStream);
 
   function showDiag(message) {
     diag.style.display = "block";
@@ -3276,6 +3300,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._error(404, "Stream session not found")
                 return
             self._json(stream.to_dict())
+
+        elif path == "/stop":
+            # 客户端主动请求停止流
+            sid = qs.get("sid", [None])[0]
+            if not sid:
+                self._error(400, "Missing ?sid= parameter")
+                return
+            stream = registry.get(sid)
+            if stream:
+                log.info(f"[{sid}] Client requested stop")
+                stream.stop()
+                stream.status = "done"
+            self._json({"status": "ok"})
 
         elif path == "/watch":
             raw_url = qs.get("url", [None])[0]
