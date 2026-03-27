@@ -1113,9 +1113,10 @@ def run_pipeline(stream: Stream):
 
 # ── HTML ──────────────────────────────────────────────────────────────────────
 STATUS_HTML = """<!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
+<meta name="referrer" content="no-referrer">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>OpenCarStream — Streaming for Tesla vehicles</title>
 <style>
@@ -1171,6 +1172,7 @@ STATUS_HTML = """<!DOCTYPE html>
 
 <div class="tabs">
   <button class="tab-btn active" data-tab="stream">Stream</button>
+  <button class="tab-btn" data-tab="bilibili">Bilibili</button>
   <button class="tab-btn" data-tab="feed">YouTube</button>
   <button class="tab-btn" data-tab="twitch" style="display:none">Twitch</button>
   <button class="tab-btn" data-tab="pluto" style="display:none">Pluto TV</button>
@@ -1267,6 +1269,31 @@ STATUS_HTML = """<!DOCTYPE html>
     <div class="feed-grid" id="feed-grid"></div>
     <div style="text-align:center;margin-top:14px;display:none;" id="feed-more-wrap">
       <button id="feed-more" style="background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:8px 20px;font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:.08em;cursor:pointer;">LOAD MORE</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Bilibili tab ── -->
+<div class="tab-panel" id="tab-bilibili">
+  <div class="card">
+    <h2>Playback options</h2>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+      <div id="bili-quality-btns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+      <div id="bili-sync-btns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+    </div>
+  </div>
+
+  <!-- Bilibili search -->
+  <div class="card">
+    <h2>Search Bilibili</h2>
+    <div class="feed-controls">
+      <input id="bili-search-input" type="text" placeholder="搜索关键词…">
+      <button id="bili-search-go">搜索</button>
+    </div>
+    <div class="feed-status" id="bili-search-status"></div>
+    <div class="feed-grid" id="bili-search-grid"></div>
+    <div style="text-align:center;margin-top:14px;display:none;" id="bili-search-more-wrap">
+      <button id="bili-search-more" style="background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:8px 20px;font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:.08em;cursor:pointer;">LOAD MORE</button>
     </div>
   </div>
 </div>
@@ -2285,6 +2312,107 @@ STATUS_HTML = """<!DOCTYPE html>
     ytSearchLimit += 12;
     runYtSearch(true);
   });
+
+  // ── Bilibili search ──
+  var biliSearchInput    = document.getElementById("bili-search-input");
+  var biliSearchGoBtn    = document.getElementById("bili-search-go");
+  var biliSearchStatus   = document.getElementById("bili-search-status");
+  var biliSearchGrid     = document.getElementById("bili-search-grid");
+  var biliSearchMoreWrap = document.getElementById("bili-search-more-wrap");
+  var biliSearchMoreBtn  = document.getElementById("bili-search-more");
+  var biliSearchLimit    = 12;
+
+  var biliQuality = createButtonGroup("bili-quality-btns", [
+    { value: "", label: "AUTO" },
+    { value: "1080", label: "1080p" },
+    { value: "720", label: "720p" },
+    { value: "480", label: "480p" },
+    { value: "360", label: "360p" }
+  ], "");
+
+  var biliSync = createButtonGroup("bili-sync-btns", [
+    { value: "0", label: "0s" },
+    { value: "500", label: "0.5s" },
+    { value: "1000", label: "1s" },
+    { value: "1500", label: "1.5s" },
+    { value: "2000", label: "2s" },
+    { value: "2500", label: "2.5s" },
+    { value: "3000", label: "3s" },
+    { value: "3500", label: "3.5s" },
+    { value: "4000", label: "4s" }
+  ], "{{audio_delay_ms}}");
+
+  function appendBiliCards(videos) {
+    videos.forEach(function (v) {
+      var card = document.createElement("div");
+      card.className = "feed-card";
+      var dur = fmtDuration(v.duration);
+      card.innerHTML =
+        '<img class="feed-thumb" src="' + (v.thumb || "") + '" loading="lazy" alt="">' +
+        '<div class="feed-info">' +
+        '<div class="feed-title">' + escHtml(v.title) + '</div>' +
+        (dur ? '<div class="feed-dur">' + escHtml(dur) + '</div>' : '') +
+        '</div>';
+      card.addEventListener("click", function () {
+        window.location.href = buildWatchUrl(v.url, biliQuality.value, biliSync.value);
+      });
+      biliSearchGrid.appendChild(card);
+    });
+  }
+
+  function runBiliSearch(append) {
+    var q = (biliSearchInput.value || "").trim();
+    if (!q) { biliSearchInput.focus(); return; }
+    if (!append) {
+      biliSearchLimit = 12;
+      biliSearchGrid.innerHTML = "";
+      biliSearchMoreWrap.style.display = "none";
+    }
+    biliSearchStatus.textContent = append ? "加载更多…" : "搜索中…";
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/bilisearch?q=" + encodeURIComponent(q) + "&limit=" + biliSearchLimit, true);
+    xhr.timeout = 30000;
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) return;
+      if (xhr.status < 200 || xhr.status >= 300) {
+        biliSearchStatus.textContent = "错误: " + xhr.status;
+        return;
+      }
+      var data;
+      try { data = JSON.parse(xhr.responseText); } catch (e) {
+        biliSearchStatus.textContent = "解析响应失败";
+        return;
+      }
+      if (data.error) {
+        biliSearchStatus.textContent = "错误: " + data.error;
+        return;
+      }
+      var videos = data.videos || [];
+      if (!videos.length) {
+        biliSearchStatus.textContent = "未找到结果";
+        return;
+      }
+      if (append) {
+        var existing = biliSearchGrid.querySelectorAll(".feed-card").length;
+        appendBiliCards(videos.slice(existing));
+      } else {
+        appendBiliCards(videos);
+      }
+      biliSearchStatus.textContent = biliSearchGrid.querySelectorAll(".feed-card").length + " 个结果";
+      biliSearchMoreWrap.style.display = "block";
+    };
+    xhr.send();
+  }
+
+  biliSearchGoBtn.addEventListener("click", function () { runBiliSearch(false); });
+  biliSearchInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") runBiliSearch(false);
+  });
+  biliSearchMoreBtn.addEventListener("click", function () {
+    biliSearchLimit += 12;
+    runBiliSearch(true);
+  });
+
   var feedLimit    = 12;
 
   function appendFeedCards(videos) {
@@ -2617,7 +2745,7 @@ STATUS_HTML = """<!DOCTYPE html>
 </body></html>"""
 
 WATCH_HTML = """<!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -3039,6 +3167,20 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, TypeError):
                 pass
             self._serve_ytsearch(q.strip(), limit)
+
+        elif path == "/bilisearch":
+            q = qs.get("q", [None])[0]
+            if not q:
+                self._error(400, "Missing ?q= parameter")
+                return
+            limit = 12
+            try:
+                raw_limit = qs.get("limit", [None])[0]
+                if raw_limit:
+                    limit = max(1, min(int(raw_limit), 50))
+            except (ValueError, TypeError):
+                pass
+            self._serve_bilisearch(q.strip(), limit)
 
         elif path == "/subscriptions":
             self._serve_subscriptions()
@@ -3504,6 +3646,60 @@ class Handler(BaseHTTPRequestHandler):
                 video_url = f"https://www.youtube.com/watch?v={vid_id}"
             if (not thumb or thumb == "NA"):
                 thumb = f"https://i.ytimg.com/vi/{vid_id}/mqdefault.jpg"
+            videos.append({
+                "id":       vid_id,
+                "title":    title,
+                "duration": duration,
+                "thumb":    thumb,
+                "url":      video_url,
+            })
+
+        self._json({"videos": videos})
+
+    def _serve_bilisearch(self, query: str, limit: int = 12):
+        """Search Bilibili videos using yt-dlp."""
+        search_url = f"bilisearch{limit}:{query}"
+        try:
+            r = subprocess.run(
+                [
+                    "yt-dlp",
+                    "--print", "%(id)s\t%(title)s\t%(duration)s\t%(thumbnail)s\t%(webpage_url)s",
+                    "--no-warnings",
+                    "--quiet",
+                    search_url,
+                ],
+                capture_output=True, text=True, timeout=25,
+            )
+        except subprocess.TimeoutExpired:
+            self._error(504, "yt-dlp timed out during search")
+            return
+        except Exception as e:
+            self._error(500, f"Search failed: {e}")
+            return
+
+        if r.returncode != 0:
+            err = r.stderr.strip() or "yt-dlp returned non-zero exit code"
+            self._error(502, f"Search failed: {err}")
+            return
+
+        videos = []
+        for line in r.stdout.strip().splitlines():
+            parts = line.split("\t", 4)
+            if len(parts) < 2:
+                continue
+            vid_id   = parts[0].strip()
+            title    = parts[1].strip()
+            duration = parts[2].strip() if len(parts) > 2 else ""
+            thumb    = parts[3].strip() if len(parts) > 3 else ""
+            webpage  = parts[4].strip() if len(parts) > 4 else ""
+            if not vid_id or vid_id == "NA":
+                continue
+            if webpage and webpage != "NA":
+                video_url = webpage
+            else:
+                video_url = f"https://www.bilibili.com/video/{vid_id}"
+            if not thumb or thumb == "NA":
+                thumb = f"https://i0.hdslb.com/bfs/archive/{vid_id}.jpg"
             videos.append({
                 "id":       vid_id,
                 "title":    title,
