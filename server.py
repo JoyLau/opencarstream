@@ -1200,8 +1200,8 @@ STATUS_HTML = """<!DOCTYPE html>
 <p class="sub">A third-party streaming launcher for Tesla’s in-car browser</p>
 
 <div class="tabs">
-  <button class="tab-btn active" data-tab="stream">Stream</button>
-  <button class="tab-btn" data-tab="bilibili">Bilibili</button>
+  <button class="tab-btn active" data-tab="bilibili">Bilibili</button>
+  <button class="tab-btn" data-tab="stream">Stream</button>
   <button class="tab-btn" data-tab="feed">YouTube</button>
   <button class="tab-btn" data-tab="twitch" style="display:none">Twitch</button>
   <button class="tab-btn" data-tab="pluto" style="display:none">Pluto TV</button>
@@ -1212,7 +1212,7 @@ STATUS_HTML = """<!DOCTYPE html>
 </div>
 
 <!-- ── Stream tab ── -->
-<div class="tab-panel active" id="tab-stream">
+<div class="tab-panel" id="tab-stream">
   <div class="card">
     <h2>Start stream</h2>
     <p style="font-size:.85rem;color:var(--muted);margin-bottom:12px;">
@@ -1303,7 +1303,7 @@ STATUS_HTML = """<!DOCTYPE html>
 </div>
 
 <!-- ── Bilibili tab ── -->
-<div class="tab-panel" id="tab-bilibili">
+<div class="tab-panel active" id="tab-bilibili">
   <div class="card">
     <h2>Playback options</h2>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
@@ -1574,10 +1574,11 @@ STATUS_HTML = """<!DOCTYPE html>
     { value: "4000", label: "4s" }
   ], "{{audio_delay_ms}}");
 
-  function buildWatchUrl(videoUrl, quality, sync) {
+  function buildWatchUrl(videoUrl, quality, sync, thumb) {
     var target = "/watch?url=" + encodeURIComponent(videoUrl);
     if (quality) target += "&quality=" + encodeURIComponent(quality);
     if (sync)    target += "&sync="    + encodeURIComponent(sync);
+    if (thumb)   target += "&thumb="   + encodeURIComponent(thumb);
     return target;
   }
 
@@ -2383,7 +2384,7 @@ STATUS_HTML = """<!DOCTYPE html>
         (dur ? '<div class="feed-dur">' + escHtml(dur) + '</div>' : '') +
         '</div>';
       card.addEventListener("click", function () {
-        window.location.href = buildWatchUrl(v.url, biliQuality.value, biliSync.value);
+        window.location.href = buildWatchUrl(v.url, biliQuality.value, biliSync.value, v.thumb);
       });
       biliSearchGrid.appendChild(card);
     });
@@ -2469,7 +2470,7 @@ STATUS_HTML = """<!DOCTYPE html>
               (dur ? '<div class="feed-dur">' + escHtml(dur) + '</div>' : '') +
               '</div>';
             card.addEventListener("click", function () {
-              window.location.href = buildWatchUrl(v.url, biliQuality.value, biliSync.value);
+              window.location.href = buildWatchUrl(v.url, biliQuality.value, biliSync.value, v.thumb);
             });
             biliSearchGrid.appendChild(card);
           });
@@ -2827,7 +2828,7 @@ WATCH_HTML = """<!DOCTYPE html>
   body{background:var(--dark);color:var(--text);font-family:'Rajdhani',sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:16px;}
   .top{width:100%;max-width:1280px;display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:12px;flex-wrap:wrap;}
   .title{font-family:'Orbitron',monospace;letter-spacing:.1em;color:var(--red);font-size:1rem;}
-  .back{color:var(--red);text-decoration:none;font-family:monospace;}
+  .back{color:var(--red);text-decoration:none;font-family:'Orbitron',monospace;font-size:1rem;}
   .wrap{width:100%;max-width:1280px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px;}
   img{width:100%;height:auto;display:block;background:black;border-radius:8px;}
   audio{width:100%;margin-top:10px;}
@@ -2857,7 +2858,7 @@ WATCH_HTML = """<!DOCTYPE html>
   <!-- 点击播放遮罩 -->
   <div id="play-overlay" class="play-overlay">
     <div class="play-btn"></div>
-    <div class="play-hint">点击开始播放</div>
+    <div class="play-hint">开始播放</div>
   </div>
   <div class="top">
     <div class="title">MJPEG + AUDIO</div>
@@ -2893,6 +2894,7 @@ WATCH_HTML = """<!DOCTYPE html>
   var videoUrl = "{{video_url}}";
   var videoQuality = "{{video_quality}}";
   var localFile = "{{local_file}}";
+  var thumbUrl = "{{thumb_url}}";
   if (!sid) {
     window.location.href = "/";
     return;
@@ -2905,6 +2907,11 @@ WATCH_HTML = """<!DOCTYPE html>
   var seekCancel = document.getElementById("seek-cancel");
   var playOverlay = document.getElementById("play-overlay");
   var started = false;
+
+  // 先显示缩略图占位
+  if (thumbUrl) {
+    img.src = thumbUrl;
+  }
 
   // 点击遮罩开始播放
   function startPlayback() {
@@ -3124,14 +3131,15 @@ def render_status_page() -> str:
             .replace("{{local_media_dir}}", LOCAL_MEDIA_DIR))
 
 def render_watch_page(stream_id: str, sync_ms: int, video_url: str = "", quality: int | None = None,
-                      local_file: str = "", seek_s: int = 0) -> str:
+                      local_file: str = "", seek_s: int = 0, thumb_url: str = "") -> str:
     return (WATCH_HTML
             .replace("{{stream_id}}", stream_id)
             .replace("{{sync_ms}}", str(sync_ms))
             .replace("{{video_url}}", video_url)
             .replace("{{video_quality}}", str(quality or ""))
             .replace("{{local_file}}", local_file)
-            .replace("{{seek_s}}", str(seek_s)))
+            .replace("{{seek_s}}", str(seek_s))
+            .replace("{{thumb_url}}", thumb_url))
 
 
 # ── HTTP handler ──────────────────────────────────────────────────────────────
@@ -3398,6 +3406,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._error(400, str(e))
                 return
             raw_sync = qs.get("sync", [None])[0]
+            raw_thumb = qs.get("thumb", [None])[0]
+            thumb_url = unquote(raw_thumb) if raw_thumb else ""
             video_url = unquote(raw_url)
             try:
                 sync_ms = self._parse_sync_ms(raw_sync, _default_sync_ms_for_url(video_url))
@@ -3415,7 +3425,7 @@ class Handler(BaseHTTPRequestHandler):
                 reuse_existing=False,
             )
             stream.seek_s = seek_s
-            self._html(render_watch_page(stream.id, sync_ms, video_url, quality))
+            self._html(render_watch_page(stream.id, sync_ms, video_url, quality, thumb_url=thumb_url))
 
         elif path == "/stream":
             raw_sync = qs.get("sync", [None])[0]
@@ -3502,6 +3512,35 @@ class Handler(BaseHTTPRequestHandler):
             streams.append({"name": name, "id": cid})
             _save_ace_streams(streams)
             self._json({"ok": True, "streams": streams})
+
+        elif path == "/bili_videos_fill":
+            length = int(self.headers.get("Content-Length", 0))
+            body   = self.rfile.read(length)
+            try:
+                data = json.loads(body)
+            except Exception:
+                self._error(400, "Invalid JSON")
+                return
+            # 验证必要字段
+            if not isinstance(data, dict):
+                self._error(400, "Expected JSON object")
+                return
+            query = data.get("query")
+            videos = data.get("videos")
+            if not query or not isinstance(videos, list):
+                self._error(400, "Missing query or videos")
+                return
+            # 加载历史并插入到最前面
+            history = _load_bili_search_history()
+            history.insert(0, data)
+            # 限制最大数量
+            if len(history) > 100:
+                history = history[:100]
+            os.makedirs(os.path.dirname(BILI_SEARCH_HISTORY_FILE) or ".", exist_ok=True)
+            with _bili_search_lock:
+                with open(BILI_SEARCH_HISTORY_FILE, "w", encoding="utf-8") as f:
+                    json.dump(history, f, indent=2, ensure_ascii=False)
+            self._json({"ok": True, "history": history})
         else:
             self._error(404, "Not found")
 
