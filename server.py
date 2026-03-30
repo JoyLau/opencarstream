@@ -637,8 +637,8 @@ def _append_bili_search_result(result: dict) -> None:
         # 插入到开头（倒序）
         history.insert(0, result)
         # 限制最大数量，避免文件过大
-        if len(history) > 100:
-            history = history[:100]
+        if len(history) > 10:
+            history = history[:10]
         with open(BILI_SEARCH_HISTORY_FILE, "w", encoding="utf-8") as f:
             json.dump(history, f, indent=2, ensure_ascii=False)
 
@@ -2840,7 +2840,7 @@ WATCH_HTML = """<!DOCTYPE html>
   .seek-pending{font-family:monospace;font-size:.9rem;color:var(--red);min-width:80px;}
   .seek-cancel{background:none;border:none;color:#888;font-size:.8rem;cursor:pointer;text-decoration:underline;padding:0;}
   /* 点击播放遮罩 */
-  .play-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:1000;cursor:pointer;}
+  .play-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.75);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:1000;cursor:pointer;}
   .play-overlay.hidden{display:none;}
   .play-btn{width:80px;height:80px;border-radius:50%;background:var(--red);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform .15s,background .15s;}
   .play-btn:hover{transform:scale(1.1);background:#ff3d5a;}
@@ -3534,8 +3534,8 @@ class Handler(BaseHTTPRequestHandler):
             history = _load_bili_search_history()
             history.insert(0, data)
             # 限制最大数量
-            if len(history) > 100:
-                history = history[:100]
+            if len(history) > 10:
+                history = history[:10]
             os.makedirs(os.path.dirname(BILI_SEARCH_HISTORY_FILE) or ".", exist_ok=True)
             with _bili_search_lock:
                 with open(BILI_SEARCH_HISTORY_FILE, "w", encoding="utf-8") as f:
