@@ -1185,9 +1185,13 @@ STATUS_HTML = """<!DOCTYPE html>
   .feed-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px;}
   .feed-card{background:var(--input-bg);border:1px solid var(--border);border-radius:8px;overflow:hidden;cursor:pointer;transition:border-color .15s;}
   .feed-card:hover{border-color:var(--red);}
-  .feed-thumb{width:100%;aspect-ratio:16/9;object-fit:cover;background:var(--thumb-bg);display:block;}
-  .feed-info{padding:8px 10px;}
-  .feed-title{font-size:.85rem;line-height:1.3;color:var(--text);margin-bottom:4px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+  .feed-thumb-wrap{position:relative;width:100%;aspect-ratio:16/9;overflow:hidden;}
+  .feed-thumb{width:100%;height:100%;object-fit:cover;background:var(--thumb-bg);display:block;}
+  .feed-thumb-overlay{position:absolute;bottom:0;left:0;right:0;padding:6px 8px;display:flex;justify-content:space-between;align-items:flex-end;background:linear-gradient(transparent,rgba(0,0,0,0.7));pointer-events:none;}
+  .feed-thumb-overlay span{font-size:.75rem;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,0.8);white-space:nowrap;}
+  .feed-info{padding:8px 10px;display:flex;flex-direction:column;}
+  .feed-title{font-size:.85rem;line-height:1.3;color:var(--text);margin-bottom:4px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:2.21rem;}
+  .feed-meta{display:flex;justify-content:space-between;font-size:.75rem;color:var(--muted);margin-top:auto;}
   .feed-dur{font-family:monospace;font-size:.75rem;color:var(--muted);}
   /* shared input style for start-stream row */
   #yt-id{flex:1;min-width:280px;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-family:monospace;}
@@ -2378,10 +2382,19 @@ STATUS_HTML = """<!DOCTYPE html>
       card.className = "feed-card";
       var dur = fmtDuration(v.duration);
       card.innerHTML =
+        '<div class="feed-thumb-wrap">' +
         '<img class="feed-thumb" src="' + (v.thumb || "") + '" loading="lazy" alt="">' +
+        '<div class="feed-thumb-overlay">' +
+        '<span>' + (v.views || "") + '</span>' +
+        '<span>' + escHtml(dur || "") + '</span>' +
+        '</div>' +
+        '</div>' +
         '<div class="feed-info">' +
         '<div class="feed-title">' + escHtml(v.title) + '</div>' +
-        (dur ? '<div class="feed-dur">' + escHtml(dur) + '</div>' : '') +
+        '<div class="feed-meta">' +
+        '<span>' + escHtml(v.author || "") + '</span>' +
+        '<span>' + escHtml(v.pub_time || "") + '</span>' +
+        '</div>' +
         '</div>';
       card.addEventListener("click", function () {
         window.location.href = buildWatchUrl(v.url, biliQuality.value, biliSync.value, v.thumb);
@@ -2464,10 +2477,19 @@ STATUS_HTML = """<!DOCTYPE html>
             card.className = "feed-card";
             var dur = fmtDuration(v.duration);
             card.innerHTML =
+              '<div class="feed-thumb-wrap">' +
               '<img class="feed-thumb" src="' + (v.thumb || "") + '" loading="lazy" alt="">' +
+              '<div class="feed-thumb-overlay">' +
+              '<span>' + (v.views || "") + '</span>' +
+              '<span>' + escHtml(dur || "") + '</span>' +
+              '</div>' +
+              '</div>' +
               '<div class="feed-info">' +
               '<div class="feed-title">' + escHtml(v.title) + '</div>' +
-              (dur ? '<div class="feed-dur">' + escHtml(dur) + '</div>' : '') +
+              '<div class="feed-meta">' +
+              '<span>' + escHtml(v.author || "") + '</span>' +
+              '<span>' + escHtml(v.pub_time || "") + '</span>' +
+              '</div>' +
               '</div>';
             card.addEventListener("click", function () {
               window.location.href = buildWatchUrl(v.url, biliQuality.value, biliSync.value, v.thumb);
